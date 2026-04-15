@@ -37,8 +37,8 @@ export const addAdmin = async (req, res) => {
 
 export const loginUser = async (req, res) => {
   let { username, password } = req.body;
-  username = username.trim();
-  password = password.trim();
+  username = username?.trim();
+  password = password?.trim();
 
   if (!username || !password) {
     return res.status(400).json({ message: "Please enter valid details" });
