@@ -63,7 +63,7 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
   }
 
   else if (role === "branchGroup") {
-    filter.schoolId = req.user.id;
+  filter.branchId = { $in: req.user.AssignedBranch };
   }
 
   else if (role === "branch") {
