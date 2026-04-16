@@ -77,30 +77,72 @@ export const getIncidents = async (req, res) => {
     limit = parseInt(limit);
     const skip = (page - 1) * limit;
 
-    // ✅ Get dynamic filter
-    let filter = buildQueryWithRole(req);
+    let match = buildQueryWithRole(req);
 
-    // ✅ Optional search
-    if (search) {
-      filter.$or = [
-        { schoolName: { $regex: search, $options: "i" } },
-        { reportedBy: { $regex: search, $options: "i" } },
-      ];
-    }
+    const pipeline = [
+      { $match: match },
 
-    const data = await Incident.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+      {
+        $lookup: {
+          from: "schools",
+          localField: "schoolId",
+          foreignField: "_id",
+          as: "school",
+        },
+      },
+      { $unwind: { path: "$school", preserveNullAndEmptyArrays: true } },
 
-    const total = await Incident.countDocuments(filter);
+      {
+        $lookup: {
+          from: "branches",
+          localField: "branchId",
+          foreignField: "_id",
+          as: "branch",
+        },
+      },
+      { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
+
+      ...(search
+        ? [
+            {
+              $match: {
+                $or: [
+                  { "school.schoolName": { $regex: search, $options: "i" } },
+                  { "branch.branchName": { $regex: search, $options: "i" } },
+                  { reportedBy: { $regex: search, $options: "i" } },
+                ],
+              },
+            },
+          ]
+        : []),
+
+      { $sort: { createdAt: -1 } },
+
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $addFields: {
+                schoolName: "$school.schoolName",
+                branchName: "$branch.branchName",
+              },
+            },
+          ],
+          total: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const result = await Incident.aggregate(pipeline);
 
     return res.status(200).json({
       success: true,
-      total,
+      total: result[0].total[0]?.count || 0,
       page,
       limit,
-      data,
+      data: result[0].data, // ✅ SAME format
     });
 
   } catch (err) {
@@ -110,7 +152,6 @@ export const getIncidents = async (req, res) => {
     });
   }
 };
-
 
 
 
