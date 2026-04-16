@@ -11,7 +11,6 @@ const incidentSchema = new mongoose.Schema(
     },
     schoolName: {
       type: String,
-      required: true,
     },
     region: {
       type: String,
