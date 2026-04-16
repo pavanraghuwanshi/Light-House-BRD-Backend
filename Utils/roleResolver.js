@@ -6,6 +6,7 @@ export const resolveSchoolAndBranch = (req) => {
 
   let schoolId;
   let branchId;
+  let parentId;
 
   if (role === "superAdmin") {
     schoolId = req.body.schoolId;
