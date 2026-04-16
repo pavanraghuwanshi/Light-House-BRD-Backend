@@ -77,8 +77,8 @@ const incidentSchema = new mongoose.Schema(
     },
     escalationStatus: {
       type: String,
-      enum: ["None", "Escalated"],
-      default: "None",
+      enum: ["No", "Yes"],
+      default: "No",
     },
     escalatedTo: String,
     remarks: String,

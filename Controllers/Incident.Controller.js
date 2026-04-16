@@ -15,7 +15,6 @@ export const addIncident = async (req, res) => {
 
     const {
       email,
-      schoolName,
       region,
       category,
       reportedBy,
@@ -34,7 +33,6 @@ export const addIncident = async (req, res) => {
 
     const newIncident = new Incident({
       email,
-      schoolName,
       region,
       category,
       reportedBy,
