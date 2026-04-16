@@ -89,7 +89,7 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
   else if (role === "parent") {
   filter.schoolId = req.user.schoolId;
   filter.branchId = req.user.branchId;
-  filter.createdBy = req.user.id;
+  filter.parentId = req.user.id;
 }
 
   else {
