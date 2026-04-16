@@ -49,7 +49,7 @@ app.use(cors());
 app.get("/", (req, res) => {
   return res.status(200).json({
     success: true,
-    message: "This is new ParentsEye Backend Server",
+    message: "This is new Light House BRD Backend Server",
     status: 200,
     statusText: "OK",
   });
@@ -87,5 +87,3 @@ server.listen(PORT, async () => {
     process.exit(1);
   }
 });
-
-// testing of pipline
