@@ -1,6 +1,8 @@
 import Incident from "../Models/incident.js";
 import School from "../Models/school.js";
 import {buildQueryWithRole, resolveSchoolAndBranch } from "../Utils/roleResolver.js"
+import mongoose from "mongoose";
+
 
 export const addIncident = async (req, res) => {
   try {
@@ -73,18 +75,28 @@ export const getIncidents = async (req, res) => {
   try {
     let { page = 1, limit = 10, search = "" } = req.query;
 
-    page = parseInt(page);
-    limit = parseInt(limit);
+    page = Math.max(1, parseInt(page));
+    limit = Math.max(1, parseInt(limit));
     const skip = (page - 1) * limit;
 
-    let match = buildQueryWithRole(req);
+    // ✅ Role-based filter
+    let filter = buildQueryWithRole(req);
+
+    // ✅ Convert to ObjectId (VERY IMPORTANT)
+    if (filter?.branchId) {
+      filter.branchId = new mongoose.Types.ObjectId(filter.branchId);
+    }
+    if (filter?.schoolId) {
+      filter.schoolId = new mongoose.Types.ObjectId(filter.schoolId);
+    }
 
     const pipeline = [
-      { $match: match },
+      { $match: filter },
 
+      // ✅ School join
       {
         $lookup: {
-          from: "schools",
+          from: "schools", // ⚠️ check your actual collection name
           localField: "schoolId",
           foreignField: "_id",
           as: "school",
@@ -92,9 +104,10 @@ export const getIncidents = async (req, res) => {
       },
       { $unwind: { path: "$school", preserveNullAndEmptyArrays: true } },
 
+      // ✅ Branch join
       {
         $lookup: {
-          from: "branches",
+          from: "branches", // ⚠️ check your actual collection name
           localField: "branchId",
           foreignField: "_id",
           as: "branch",
@@ -102,6 +115,7 @@ export const getIncidents = async (req, res) => {
       },
       { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
 
+      // ✅ Search
       ...(search
         ? [
             {
@@ -116,17 +130,29 @@ export const getIncidents = async (req, res) => {
           ]
         : []),
 
+      // ✅ Sort latest first
       { $sort: { createdAt: -1 } },
 
+      // ✅ Pagination + Count
       {
         $facet: {
           data: [
             { $skip: skip },
             { $limit: limit },
+
+            // ✅ Add flat fields
             {
               $addFields: {
                 schoolName: "$school.schoolName",
                 branchName: "$branch.branchName",
+              },
+            },
+
+            // ✅ Remove unwanted lookup data
+            {
+              $project: {
+                school: 0,
+                branch: 0,
               },
             },
           ],
@@ -139,19 +165,21 @@ export const getIncidents = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      total: result[0].total[0]?.count || 0,
+      total: result[0]?.total[0]?.count || 0,
       page,
       limit,
-      data: result[0].data, // ✅ SAME format
+      data: result[0]?.data || [],
     });
 
   } catch (err) {
+    console.error("GET INCIDENT ERROR:", err);
     return res.status(400).json({
       success: false,
       message: err.message,
     });
   }
 };
+
 
 
 
