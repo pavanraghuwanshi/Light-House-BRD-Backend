@@ -10,6 +10,7 @@ export const resolveSchoolAndBranch = (req) => {
   if (role === "superAdmin") {
     schoolId = req.body.schoolId;
     branchId = req.body.branchId;
+    parentId = req.body.parentId;
 
     if (!schoolId) {
       throw new Error("schoolId is required for superAdmin");
@@ -19,6 +20,7 @@ export const resolveSchoolAndBranch = (req) => {
   else if (role === "school") {
     schoolId = req.user.id;
     branchId = req.body.branchId;
+    parentId = req.body.parentId;
 
     if (!branchId) {
       throw new Error("branchId is required for school");
@@ -28,6 +30,7 @@ export const resolveSchoolAndBranch = (req) => {
   else if (role === "branchGroup") {
     schoolId = req.user.schoolId;
     branchId = req.body.branchId;
+    parentId = req.body.parentId;
 
     if (!branchId) {
       throw new Error("branchId is required for branchGroup");
@@ -37,13 +40,26 @@ export const resolveSchoolAndBranch = (req) => {
   else if (role === "branch") {
     schoolId = req.user.schoolId;
     branchId = req.user.id;
+    parentId = req.body.parentId;
+
   }
+   else if (role === "parent") {
+    schoolId = req.user.schoolId;
+    branchId = req.user.branchId;
+    parentId = req.user.id;
+
+
+    if (!branchId || !schoolId) {
+      throw new Error("Parent must be associated with a branch and school");
+    }
+  }
+
 
   else {
     throw new Error("You are not authorized to perform this action.");
   }
 
-  return { schoolId, branchId };
+  return { schoolId, branchId, parentId };
 };
 
 
@@ -70,6 +86,11 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
     filter.schoolId = req.user.schoolId;
     filter.branchId = req.user.id;
   }
+  else if (role === "parent") {
+  filter.schoolId = req.user.schoolId;
+  filter.branchId = req.user.branchId;
+  filter.createdBy = req.user.id;
+}
 
   else {
     throw new Error("You are not authorized to perform this action.");

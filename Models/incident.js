@@ -91,6 +91,10 @@ const incidentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Branch",
     },
+    parentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Parent",
+    },
   },
   { timestamps: true }
 );

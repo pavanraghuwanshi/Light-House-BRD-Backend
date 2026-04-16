@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 export const addIncident = async (req, res) => {
   try {
     // ✅ Use common function
-    const { schoolId, branchId } = resolveSchoolAndBranch(req);
+    const { schoolId, branchId,parentId } = resolveSchoolAndBranch(req);
 
     // ✅ Validate School
     const school = await School.findById(schoolId);
@@ -51,6 +51,7 @@ export const addIncident = async (req, res) => {
       remarks,
       schoolId,
       branchId,
+      parentId
     });
 
     await newIncident.save();
@@ -88,6 +89,9 @@ export const getIncidents = async (req, res) => {
     }
     if (filter?.schoolId) {
       filter.schoolId = new mongoose.Types.ObjectId(filter.schoolId);
+    }
+    if (filter?.parentId) {
+      filter.parentId = new mongoose.Types.ObjectId(filter.parentId);
     }
 
     const pipeline = [
