@@ -7,6 +7,7 @@ import xlsx from "xlsx";
 
 export const addBranch = async (req, res) => {
   const {
+    safetyHeadName,
     branchName,
     username,
     password,
@@ -49,6 +50,7 @@ export const addBranch = async (req, res) => {
 
     // Create new branch
     const newBranch = new Branch({
+      safetyHeadName,
       branchName,
       username,
       password: encryptedPassword,
@@ -161,6 +163,7 @@ export const updateBranch = async (req, res) => {
   const { role } = req.user;
   const { id } = req.params;
   const {
+    safetyHeadName,
     branchName,
     username,
     password,
@@ -194,6 +197,7 @@ export const updateBranch = async (req, res) => {
     };
 
     const updateData = {
+      safetyHeadName,
       branchName,
       username,
       email,

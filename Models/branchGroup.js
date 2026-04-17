@@ -2,9 +2,14 @@ import mongoose from 'mongoose';
 import  {dbConnections}  from "../Database/db.js"; 
 
 const branchSchema = new mongoose.Schema({
-  branchGroupName: {
+  regionHeadName: {
     type: String,
     required: true
+  },
+  branchGroupName: {
+    type: String,
+    required: true,
+    unique:true
   },
   schoolId: {
     type: mongoose.Schema.Types.ObjectId,

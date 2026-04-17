@@ -6,6 +6,7 @@ import findSameUsername from "../Utils/findSameUsername.js";
 
 export const addBranchGroup = async (req, res) => {
      const {
+      regionHeadName,
        branchGroupName,
        username,
        password,
@@ -39,6 +40,7 @@ if (existingUserByUsername.exists) {
    
        // Create new branch
        const newBranchGroup = new BranchGroup({
+        regionHeadName,
          branchGroupName,
          username,
          password:encryptedPassword,
@@ -100,7 +102,7 @@ export const updateBranchGroup = async (req, res) => {
 
   const { role } = req.user;
   const { id } = req.params;
-  const { branchGroupName,AssignedBranch, username, password, email, address, mobileNo } = req.body;
+  const { regionHeadName,branchGroupName,AssignedBranch, username, password, email, address, mobileNo } = req.body;
 
    if (role !== 'school' && role !== 'superAdmin') {
   return res.status(403).json({ message: 'You are not a valid user.' });
@@ -119,6 +121,7 @@ export const updateBranchGroup = async (req, res) => {
   }
 
     const updateData = {
+      regionHeadName,
       branchGroupName,
       AssignedBranch,
       username,

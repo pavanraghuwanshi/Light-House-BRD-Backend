@@ -3,9 +3,14 @@ import mongoose from 'mongoose';
 import  {dbConnections}  from "../Database/db.js"; 
 
 const branchSchema = new mongoose.Schema({
+  safetyHeadName:{
+    type:String,
+    required:true
+  },
   branchName: {
     type: String,
-    required: true
+    required: true,
+    unique:true
   },
   schoolId: {
     type: mongoose.Schema.Types.ObjectId,
