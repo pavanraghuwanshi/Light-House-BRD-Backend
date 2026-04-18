@@ -83,7 +83,7 @@ setupSocket(server);
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
   try {
-    console.log(`Server is listening on port Powered by Pavan ${PORT}`);
+    console.log(`Server is listening on port ${PORT}`);
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);

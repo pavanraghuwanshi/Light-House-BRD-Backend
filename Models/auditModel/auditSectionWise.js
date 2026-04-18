@@ -33,9 +33,4 @@ const auditSectionSchema = new mongoose.Schema({
 
 auditSectionSchema.index({ auditId: 1, sectionName: 1 }, { unique: true });
 
-auditSectionSchema.index(
-  { auditId: 1, sectionName: 1 },
-  { unique: true }
-);
-
 export default dbConnections.db2.model('AuditSectionWise', auditSectionSchema);

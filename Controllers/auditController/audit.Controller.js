@@ -47,87 +47,6 @@ export const createAudit = async (req, res) => {
 
 
 
-//  FINALIZE AUDIT (CRITICAL + SCORE)
-export const finalizeAudit = async (req, res) => {
-  try {
-    const { role } = req.user;
-    const { auditId } = req.params;
-
-    if (!["admin", "safety_head"].includes(role)) {
-      return res.status(403).json({ message: "Not allowed" });
-    }
-
-    const { schoolId } = resolveSchoolAndBranch(req);
-
-    const audit = await Audit.findById(auditId);
-
-    if (!audit) {
-      return res.status(404).json({ message: "Audit not found" });
-    }
-
-    if (audit.schoolId.toString() !== schoolId.toString()) {
-      return res.status(403).json({ message: "Unauthorized" });
-    }
-
-    const sections = await AuditSection.find({ auditId });
-
-    const REQUIRED = ["A","B","C","D","E","F","G","H","I"];
-
-    if (sections.length < REQUIRED.length) {
-      return res.status(400).json({
-        message: "All sections not completed"
-      });
-    }
-
-    let total = 0;
-    let max = 0;
-    let criticalFailed = false;
-
-    sections.forEach(sec => {
-      total += sec.sectionScore;
-      max += sec.parameters.length * 2;
-
-      if (sec.isCriticalFailed) {
-        criticalFailed = true;
-      }
-    });
-
-    const percentage = (total / max) * 100;
-
-    let result;
-
-    if (criticalFailed) {
-      result = "FAIL";
-    } else if (percentage >= 85) {
-      result = "PASS";
-    } else {
-      result = "CONDITIONAL_PASS";
-    }
-
-    const updated = await Audit.findByIdAndUpdate(
-      auditId,
-      {
-        totalScore: total,
-        percentage,
-        result,
-        criticalFailed,
-        status: "completed"
-      },
-      { new: true }
-    );
-
-    res.json({
-      success: true,
-      data: updated
-    });
-
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
-
-
-
 //  GET ALL AUDITS (ROLE + HIERARCHY)
 
 export const getAudits = async (req, res) => {
@@ -274,6 +193,105 @@ export const getAudits = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//  FINALIZE AUDIT (CRITICAL + SCORE)
+export const finalizeAudit = async (req, res) => {
+  try {
+    const { role } = req.user;
+    const { auditId } = req.params;
+
+    if (!["admin", "safety_head"].includes(role)) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    const { schoolId } = resolveSchoolAndBranch(req);
+
+    const audit = await Audit.findById(auditId);
+
+    if (!audit) {
+      return res.status(404).json({ message: "Audit not found" });
+    }
+
+    if (audit.schoolId.toString() !== schoolId.toString()) {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    const sections = await AuditSection.find({ auditId });
+
+    const REQUIRED = ["A","B","C","D","E","F","G","H","I"];
+
+    if (sections.length < REQUIRED.length) {
+      return res.status(400).json({
+        message: "All sections not completed"
+      });
+    }
+
+    let total = 0;
+    let max = 0;
+    let criticalFailed = false;
+
+    sections.forEach(sec => {
+      total += sec.sectionScore;
+      max += sec.parameters.length * 2;
+
+      if (sec.isCriticalFailed) {
+        criticalFailed = true;
+      }
+    });
+
+    const percentage = (total / max) * 100;
+
+    let result;
+
+    if (criticalFailed) {
+      result = "FAIL";
+    } else if (percentage >= 85) {
+      result = "PASS";
+    } else {
+      result = "CONDITIONAL_PASS";
+    }
+
+    const updated = await Audit.findByIdAndUpdate(
+      auditId,
+      {
+        totalScore: total,
+        percentage,
+        result,
+        criticalFailed,
+        status: "completed"
+      },
+      { new: true }
+    );
+
+    res.json({
+      success: true,
+      data: updated
+    });
+
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+
 
 
 
