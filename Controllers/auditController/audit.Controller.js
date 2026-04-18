@@ -1,3 +1,5 @@
+import { AUDIT_CRITICAL_CONFIG } from "../../config/auditCriticalConfig.js";
+import { SECTION_WEIGHTS } from "../../config/auditWeightConfig.js";
 import Audit from "../../Models/auditModel/auditMain.js";
 import AuditSection from "../../Models/auditModel/auditSectionWise.js";
 import School from "../../Models/school.js";
@@ -267,6 +269,111 @@ export const getAudits = async (req, res) => {
 
 
 
+//  all section total persentage 
+
+export const finalizeAudit = async (req, res) => {
+  try {
+    const { auditId } = req.params;
+
+    const audit = await Audit.findById(auditId);
+    if (!audit) {
+      return res.status(404).json({ message: "Audit not found" });
+    }
+
+    // ❌ Already finalized
+    if (audit.status === "completed") {
+      return res.status(400).json({ message: "Already finalized" });
+    }
+
+    // ✅ Get all sections
+    const sections = await AuditSection.find({ auditId });
+
+    let totalWeightedScore = 0;
+    let totalWeight = 0;
+
+    let isAuditFailed = false;
+    let failureReasons = [];
+
+    let sectionWise = [];
+
+    for (let section of sections) {
+      const sectionName = section.sectionName;
+      const weight = SECTION_WEIGHTS[sectionName] || 0;
+
+      const criticalList = AUDIT_CRITICAL_CONFIG[sectionName] || [];
+
+      let sectionMaxScore = section.parameters.length * 2;
+      let sectionObtained = 0;
+
+      section.parameters.forEach(p => {
+        sectionObtained += p.score;
+
+        // 🔥 CRITICAL FAIL CHECK
+        if (
+          criticalList.includes(p.name) &&
+          p.isCompliant === false
+        ) {
+          isAuditFailed = true;
+          failureReasons.push(`${sectionName} - ${p.name}`);
+        }
+      });
+
+      const sectionPercentage =
+        sectionMaxScore === 0
+          ? 0
+          : (sectionObtained / sectionMaxScore) * 100;
+
+      const weightedScore = (sectionPercentage * weight) / 100;
+
+      totalWeightedScore += weightedScore;
+      totalWeight += weight;
+
+      sectionWise.push({
+        section: sectionName,
+        weight,
+        obtained: sectionObtained,
+        max: sectionMaxScore,
+        percentage: sectionPercentage.toFixed(2)
+      });
+    }
+
+    const finalPercentage =
+      totalWeight === 0
+        ? 0
+        : (totalWeightedScore / totalWeight) * 100;
+
+    // 🔥 FINAL RESULT LOGIC
+    let result = "PASS";
+
+    if (isAuditFailed) {
+      result = "FAIL";
+    } else if (finalPercentage < 85) {
+      result = "CONDITIONAL_PASS";
+    }
+
+    // ✅ Save in DB
+    audit.status = "completed";
+    audit.finalScore = finalPercentage.toFixed(2);
+    audit.result = result;
+    audit.failureReasons = failureReasons;
+
+    await audit.save();
+
+    return res.json({
+      success: true,
+      result,
+      finalPercentage: finalPercentage.toFixed(2),
+      failureReasons,
+      sectionWise
+    });
+
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
 
 
 
@@ -284,83 +391,83 @@ export const getAudits = async (req, res) => {
 
 
 //  FINALIZE AUDIT (CRITICAL + SCORE)
-export const finalizeAudit = async (req, res) => {
-  try {
-    const { role } = req.user;
-    const { auditId } = req.params;
+// export const finalizeAudit = async (req, res) => {
+//   try {
+//     const { role } = req.user;
+//     const { auditId } = req.params;
 
-    if (!["admin", "safety_head"].includes(role)) {
-      return res.status(403).json({ message: "Not allowed" });
-    }
+//     if (!["admin", "safety_head"].includes(role)) {
+//       return res.status(403).json({ message: "Not allowed" });
+//     }
 
-    const { schoolId } = resolveSchoolAndBranch(req);
+//     const { schoolId } = resolveSchoolAndBranch(req);
 
-    const audit = await Audit.findById(auditId);
+//     const audit = await Audit.findById(auditId);
 
-    if (!audit) {
-      return res.status(404).json({ message: "Audit not found" });
-    }
+//     if (!audit) {
+//       return res.status(404).json({ message: "Audit not found" });
+//     }
 
-    if (audit.schoolId.toString() !== schoolId.toString()) {
-      return res.status(403).json({ message: "Unauthorized" });
-    }
+//     if (audit.schoolId.toString() !== schoolId.toString()) {
+//       return res.status(403).json({ message: "Unauthorized" });
+//     }
 
-    const sections = await AuditSection.find({ auditId });
+//     const sections = await AuditSection.find({ auditId });
 
-    const REQUIRED = ["A","B","C","D","E","F","G","H","I"];
+//     const REQUIRED = ["A","B","C","D","E","F","G","H","I"];
 
-    if (sections.length < REQUIRED.length) {
-      return res.status(400).json({
-        message: "All sections not completed"
-      });
-    }
+//     if (sections.length < REQUIRED.length) {
+//       return res.status(400).json({
+//         message: "All sections not completed"
+//       });
+//     }
 
-    let total = 0;
-    let max = 0;
-    let criticalFailed = false;
+//     let total = 0;
+//     let max = 0;
+//     let criticalFailed = false;
 
-    sections.forEach(sec => {
-      total += sec.sectionScore;
-      max += sec.parameters.length * 2;
+//     sections.forEach(sec => {
+//       total += sec.sectionScore;
+//       max += sec.parameters.length * 2;
 
-      if (sec.isCriticalFailed) {
-        criticalFailed = true;
-      }
-    });
+//       if (sec.isCriticalFailed) {
+//         criticalFailed = true;
+//       }
+//     });
 
-    const percentage = (total / max) * 100;
+//     const percentage = (total / max) * 100;
 
-    let result;
+//     let result;
 
-    if (criticalFailed) {
-      result = "FAIL";
-    } else if (percentage >= 85) {
-      result = "PASS";
-    } else {
-      result = "CONDITIONAL_PASS";
-    }
+//     if (criticalFailed) {
+//       result = "FAIL";
+//     } else if (percentage >= 85) {
+//       result = "PASS";
+//     } else {
+//       result = "CONDITIONAL_PASS";
+//     }
 
-    const updated = await Audit.findByIdAndUpdate(
-      auditId,
-      {
-        totalScore: total,
-        percentage,
-        result,
-        criticalFailed,
-        status: "completed"
-      },
-      { new: true }
-    );
+//     const updated = await Audit.findByIdAndUpdate(
+//       auditId,
+//       {
+//         totalScore: total,
+//         percentage,
+//         result,
+//         criticalFailed,
+//         status: "completed"
+//       },
+//       { new: true }
+//     );
 
-    res.json({
-      success: true,
-      data: updated
-    });
+//     res.json({
+//       success: true,
+//       data: updated
+//     });
 
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
+//   } catch (err) {
+//     res.status(400).json({ success: false, message: err.message });
+//   }
+// };
 
 
 

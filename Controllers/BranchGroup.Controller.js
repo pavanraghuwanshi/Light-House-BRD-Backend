@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import BranchGroup from "../Models/branchGroup.js";
 import  School  from "../Models/school.js";
 import { decrypt, encrypt } from "../Utils/crypto.js";
@@ -64,6 +65,8 @@ export const getBranchGroups = async (req, res) => {
   const role = req.user.role;
   
   try {
+
+    const ObjectId = mongoose.Types.ObjectId;
     
     let BranchGroups;
     if(role=='superAdmin'){

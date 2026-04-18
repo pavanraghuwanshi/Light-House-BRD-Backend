@@ -17,10 +17,8 @@ router.post("/audit/section/save", authenticateUser, saveSection);
 router.get("/audit",authenticateUser, getAudits);
 
 
-
-
 // Finalize
-router.post("/finalize/:auditId", authenticateUser, finalizeAudit);
+router.get("/audit/finalize/:auditId", authenticateUser, finalizeAudit);
 
 
 router.get("audit/:auditId", getFullAudit);
