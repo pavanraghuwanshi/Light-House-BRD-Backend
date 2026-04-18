@@ -17,7 +17,7 @@ router.post("/audit/section/save", authenticateUser, saveSection);
 router.post("/finalize/:auditId", authenticateUser, finalizeAudit);
 
 // Get
-router.get("/", getAudits);
+router.get("/audit", getAudits);
 router.get("/:auditId", getFullAudit);
 
 // Delete
