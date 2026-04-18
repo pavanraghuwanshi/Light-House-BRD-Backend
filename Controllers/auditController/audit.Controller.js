@@ -130,6 +130,77 @@ export const getAudits = async (req, res) => {
               },
             },
 
+
+            // ✅ createdBy → schools
+            {
+              $lookup: {
+                from: "schools",
+                localField: "createdBy",
+                foreignField: "_id",
+                pipeline: [{ $project: { schoolName: 1 } }],
+                as: "createdBySchool",
+              },
+            },
+
+            // ✅ createdBy → branches
+            {
+              $lookup: {
+                from: "branches",
+                localField: "createdBy",
+                foreignField: "_id",
+                pipeline: [{ $project: { branchName: 1 } }],
+                as: "createdByBranch",
+              },
+            },
+
+            // ✅ createdBy → branchgroups (optional but recommended)
+            {
+              $lookup: {
+                from: "branchgroups",
+                localField: "createdBy",
+                foreignField: "_id",
+                pipeline: [{ $project: { branchGroupName: 1,regionHeadName:1 } }],
+                as: "createdByBranchGroup",
+              },
+            },
+
+            // 🔥 FINAL NAME RESOLVE
+            {
+              $addFields: {
+                createdByName: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$createdByUser.name", 0] },
+                    {
+                      $ifNull: [
+                        { $arrayElemAt: ["$createdBySchool.schoolName", 0] },
+                        {
+                          $ifNull: [
+                            { $arrayElemAt: ["$createdByBranch.branchName", 0] },
+                            { $arrayElemAt: ["$createdByBranchGroup.branchGroupName", 0] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+
+                // ✅ IMPORTANT: ye bhi andar hi rahega
+                regionHeadName: {
+                  $arrayElemAt: ["$createdByBranchGroup.regionHeadName", 0]
+                }
+              }
+            },
+
+            // ❌ cleanup
+            {
+              $project: {
+                createdByUser: 0,
+                createdBySchool: 0,
+                createdByBranch: 0,
+                createdByBranchGroup: 0,
+              }
+            },
+
             // ✅ School (only name)
             {
               $lookup: {
