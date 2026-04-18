@@ -67,7 +67,7 @@ export const getBranchGroups = async (req, res) => {
   
   try {
 
-    const ObjectId = mongoose.Types.ObjectId;
+    const ObjectId = new mongoose.Types.ObjectId(id);
     
     let BranchGroups;
     if(role=='superAdmin'){
@@ -78,7 +78,7 @@ export const getBranchGroups = async (req, res) => {
           select: 'branchName', 
         });
       }else if(role =='school'){
-         BranchGroups = await BranchGroup.find({schoolId: new ObjectId(id)})
+         BranchGroups = await BranchGroup.find({schoolId: ObjectId})
          .populate("schoolId","schoolName").populate({
           path: 'AssignedBranch',
           select: 'branchName', 
