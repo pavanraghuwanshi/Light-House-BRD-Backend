@@ -3,6 +3,7 @@ import { dbConnections } from "../../Database/db.js";
 
 const auditSchema = new mongoose.Schema({
   schoolId: mongoose.Schema.Types.ObjectId,
+  branchId:mongoose.Schema.Types.ObjectId,
   regionId: mongoose.Schema.Types.ObjectId,
 
   createdBy: mongoose.Schema.Types.ObjectId,
