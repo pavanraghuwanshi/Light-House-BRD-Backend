@@ -63,6 +63,7 @@ if (existingUserByUsername.exists) {
 
 export const getBranchGroups = async (req, res) => {
   const role = req.user.role;
+  const id = req.user.role;
   
   try {
 
