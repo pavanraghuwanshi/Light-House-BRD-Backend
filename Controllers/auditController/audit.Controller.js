@@ -1,7 +1,9 @@
 import Audit from "../../Models/auditModel/auditMain.js";
 import AuditSection from "../../Models/auditModel/auditSectionWise.js";
 import School from "../../Models/school.js";
-import { resolveSchoolAndBranch } from "../../Utils/roleResolver.js";
+import { buildQueryWithRole, resolveSchoolAndBranch } from "../../Utils/roleResolver.js";
+import mongoose from "mongoose";
+
 
 
 
@@ -130,40 +132,148 @@ export const finalizeAudit = async (req, res) => {
 
 export const getAudits = async (req, res) => {
   try {
-    const { role, id } = req.user;
+    let { page = 1, limit = 10, search = "" } = req.query;
 
-    const { schoolId, branchId } = resolveSchoolAndBranch(req);
+    page = Math.max(1, parseInt(page));
+    limit = Math.max(1, parseInt(limit));
+    const skip = (page - 1) * limit;
 
-    let filter = {};
+    // ✅ Role-based filter
+    let filter = buildQueryWithRole(req);
 
-    if (role === "superAdmin" || role === "admin" || role === "cxo") {
-      filter = {};
-    } 
-    else if (role === "regional_head") {
-      filter.regionId = req.user.regionId;
+    // ✅ Convert ObjectIds (important for index usage)
+    if (filter?.branchId) {
+      filter.branchId = new mongoose.Types.ObjectId(filter.branchId);
     }
-    else if (role === "school") {
-      filter.schoolId = schoolId;
+    if (filter?.schoolId) {
+      filter.schoolId = new mongoose.Types.ObjectId(filter.schoolId);
     }
-    else if (role === "branch") {
-      filter.branchId = branchId;
-    }
-    else if (role === "coordinator") {
-      filter.assignedTo = id;
-    }
+    // if (filter?.parentId) {
+    //   filter.parentId = new mongoose.Types.ObjectId(filter.parentId);
+    // }
 
-    const audits = await Audit.find(filter).sort({ createdAt: -1 });
+    // 🔥 Base pipeline (FAST MATCH FIRST)
+    const pipeline = [
+      { $match: filter },
 
-    res.json({
+      ...(search
+        ? [
+            {
+              $lookup: {
+                from: "schools",
+                localField: "schoolId",
+                foreignField: "_id",
+                as: "school",
+              },
+            },
+            {
+              $lookup: {
+                from: "branches",
+                localField: "branchId",
+                foreignField: "_id",
+                as: "branch",
+              },
+            },
+            {
+              $match: {
+                $or: [
+                  { "school.schoolName": { $regex: search, $options: "i" } },
+                  { "branch.branchName": { $regex: search, $options: "i" } },
+                ],
+              },
+            },
+          ]
+        : []),
+
+      { $sort: { createdAt: -1 } },
+
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+
+            // ✅ ✅ CORRECT COLLECTION NAME
+            {
+              $lookup: {
+                from: "auditsectionwises",
+                let: { auditId: "$_id" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $eq: ["$auditId", "$$auditId"]
+                      }
+                    }
+                  }
+                ],
+                as: "sections",
+              },
+            },
+
+            // ✅ School (only name)
+            {
+              $lookup: {
+                from: "schools",
+                localField: "schoolId",
+                foreignField: "_id",
+                pipeline: [{ $project: { schoolName: 1 } }],
+                as: "school",
+              },
+            },
+            {
+              $addFields: {
+                schoolName: { $arrayElemAt: ["$school.schoolName", 0] }
+              },
+            },
+
+            // ✅ Branch (only name)
+            {
+              $lookup: {
+                from: "branches",
+                localField: "branchId",
+                foreignField: "_id",
+                pipeline: [{ $project: { branchName: 1 } }],
+                as: "branch",
+              },
+            },
+            {
+              $addFields: {
+                branchName: { $arrayElemAt: ["$branch.branchName", 0] }
+              },
+            },
+
+            {
+              $project: {
+                school: 0,
+                branch: 0,
+              },
+            },
+          ],
+
+          total: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const result = await Audit.aggregate(pipeline);
+
+    return res.status(200).json({
       success: true,
-      data: audits
+      total: result[0]?.total[0]?.count || 0,
+      page,
+      limit,
+      data: result[0]?.data || [],
     });
 
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    console.error("GET AUDITS ERROR:", err);
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
-
 
 
 
