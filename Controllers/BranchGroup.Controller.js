@@ -63,11 +63,12 @@ if (existingUserByUsername.exists) {
 
 export const getBranchGroups = async (req, res) => {
   const role = req.user.role;
-  const id = req.user.role;
+  const id = req.user.id;
   
   try {
 
     const ObjectId = new mongoose.Types.ObjectId(id);
+
     
     let BranchGroups;
     if(role=='superAdmin'){
@@ -76,13 +77,13 @@ export const getBranchGroups = async (req, res) => {
          .populate("schoolId","schoolName").populate({
           path: 'AssignedBranch',
           select: 'branchName', 
-        });
+        }).select("-fcmToken");
       }else if(role =='school'){
          BranchGroups = await BranchGroup.find({schoolId: ObjectId})
          .populate("schoolId","schoolName").populate({
           path: 'AssignedBranch',
           select: 'branchName', 
-        })
+        }).select("-fcmToken")
       }
 
     if (!BranchGroups || BranchGroups.length === 0) {
