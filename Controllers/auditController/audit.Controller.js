@@ -459,7 +459,7 @@ export const finalizeAudit = async (req, res) => {
       result = "FAIL";
       status = "failed"; // 👈 IMPORTANT
     } else if (finalPercentage < 85) {
-      result = "CONDITIONAL_PASS";
+      result = "CONDITIONAL PASS";
     }
 
     // ✅ SAVE ALWAYS (even FAIL)

@@ -17,7 +17,7 @@ const auditSchema = new mongoose.Schema({
 
   result: {
     type: String,
-    enum: ["PASS", "CONDITIONAL_PASS", "FAIL"]
+    enum: ["PASS", "CONDITIONAL PASS", "FAIL"]
   },
 
   finalScore: { // ✅ consistent naming
