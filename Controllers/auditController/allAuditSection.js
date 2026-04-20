@@ -76,14 +76,14 @@ import { resolveSchoolAndBranch } from "../../Utils/roleResolver.js";
 
 const SECTION_NAME_MAP = {
   "Governance & Safety Management": "A",
-  "Fire Safety": "B",
-  "Building & Infrastructure Safety": "C",
-  "Electrical / Lab / Chemical Safety": "D",
-  "Child Safety & Protection": "E",
-  "Security & Access Control": "F",
-  "Health, Hygiene & Environment": "G",
+  "Fire & Life Safety": "B",
+  "Infrastructure & Building Safety": "C",
+  "Electrical, Lab & Utility Safety": "D",
+  "Student Safeguarding & Child Protection": "E",
+  "Access Control & Security": "F",
+  "Health, First Aid & Medical Emergency": "G",
   "Transport Safety": "H",
-  "Food Safety": "I"
+  "Hygiene, Housekeeping & Food Safety": "I"
 };
 
 
