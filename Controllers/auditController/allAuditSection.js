@@ -72,17 +72,41 @@ import { resolveSchoolAndBranch } from "../../Utils/roleResolver.js";
 //   }
 // };
 
+
+
+const SECTION_NAME_MAP = {
+  "Governance & Safety Management": "A",
+  "Fire Safety": "B",
+  "Building & Infrastructure Safety": "C",
+  "Electrical / Lab / Chemical Safety": "D",
+  "Child Safety & Protection": "E",
+  "Security & Access Control": "F",
+  "Health, Hygiene & Environment": "G",
+  "Transport Safety": "H",
+  "Food Safety": "I"
+};
+
+
+
 export const saveSection = async (req, res) => {
   try {
     const { role, id } = req.user;
     const { auditId, sectionName, parameters } = req.body;
 
-    // ✅ Validate input
     if (!auditId || !sectionName || !Array.isArray(parameters)) {
       return res.status(400).json({ message: "Invalid payload" });
     }
 
-    // ✅ Resolve hierarchy
+    // 🔥 Convert sectionName → sectionCode
+    const sectionCode =
+      AUDIT_CRITICAL_CONFIG[sectionName] 
+        ? sectionName // already A/B/C
+        : SECTION_NAME_MAP[sectionName];
+
+    if (!sectionCode) {
+      return res.status(400).json({ message: "Invalid section name" });
+    }
+
     const { schoolId } = resolveSchoolAndBranch(req);
 
     const audit = await Audit.findById(auditId);
@@ -90,52 +114,47 @@ export const saveSection = async (req, res) => {
       return res.status(404).json({ message: "Audit not found" });
     }
 
-    // 🔐 Ensure same school access
     if (audit.schoolId.toString() !== schoolId.toString()) {
       return res.status(403).json({ message: "Unauthorized access" });
     }
 
-    // 🔐 Role check
     if (!["superAdmin", "school", "branchGroup", "branch"].includes(role)) {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    const criticalList = AUDIT_CRITICAL_CONFIG[sectionName] || [];
+    // ✅ Correct critical list
+    const criticalList = AUDIT_CRITICAL_CONFIG[sectionCode] || [];
 
     let sectionScore = 0;
     let isCriticalFailed = false;
 
     const processedParams = parameters.map((p) => {
-      // ❗ Validate required fields
       if (!p.key) {
         throw new Error(`Missing key for parameter: ${p.name}`);
       }
 
-      // ✅ Backend decides critical
       const isCritical = criticalList.includes(p.key);
 
-      // ❗ Prevent frontend score tampering (optional rule)
       const score = typeof p.score === "number" ? p.score : 0;
       sectionScore += score;
 
-      // ❗ Critical fail logic
-      if (isCritical && p.isCompliant === false) {
+      // 🔥 Strict backend logic
+      if (isCritical && score !== 2) {
         isCriticalFailed = true;
       }
 
       return {
         key: p.key,
-        name: p.name, // for UI
+        name: p.name,
         score,
-        isCompliant: p.isCompliant,
         remark: p.remark || "",
         evidence: p.evidence || null,
-        isCritical // 🔥 always controlled by backend
+        isCritical
       };
     });
 
     const section = await AuditSection.findOneAndUpdate(
-      { auditId, sectionName },
+      { auditId, sectionName: sectionCode }, // 🔥 store code
       {
         parameters: processedParams,
         sectionScore,
