@@ -26,7 +26,7 @@ export const saveSection = async (req, res) => {
     }
 
     // 🔐 Role check
-    if (!["superadmin", "school", "branchGroup", "branch"].includes(role)) {
+    if (!["superAdmin", "school", "branchGroup", "branch"].includes(role)) {
       return res.status(403).json({ message: "Not allowed" });
     }
 
