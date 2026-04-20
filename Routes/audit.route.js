@@ -18,7 +18,7 @@ router.get("/audit",authenticateUser, getAudits);
 
 
 // Finalize
-router.get("/audit/finalize/:auditId", authenticateUser, finalizeAudit);
+router.post("/audit/finalize/:auditId", authenticateUser, finalizeAudit);
 
 
 router.get("audit/:auditId", getFullAudit);
