@@ -228,6 +228,72 @@ export const updateIncident = async (req, res) => {
 
 
 
+
+
+//  update incident status only
+
+export const updateIncidentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, remarks, escalationStatus, escalatedTo, closureDate } = req.body;
+
+    // validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Incident ID",
+      });
+    }
+
+    // validate status
+    const allowedStatus = ["Open", "In Progress", "Closed"];
+    if (status && !allowedStatus.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status value",
+      });
+    }
+
+    const incident = await Incident.findById(id);
+
+    if (!incident) {
+      return res.status(404).json({
+        success: false,
+        message: "Incident not found",
+      });
+    }
+
+    // update fields
+    if (status) incident.status = status;
+    if (remarks) incident.remarks = remarks;
+    if (escalationStatus) incident.escalationStatus = escalationStatus;
+    if (escalatedTo) incident.escalatedTo = escalatedTo;
+
+    // auto set closure date when closed
+    if (status === "Closed") {
+      incident.closureDate = closureDate || new Date();
+    }
+
+    await incident.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Incident status updated successfully",
+      data: incident,
+    });
+
+  } catch (error) {
+    console.error("Error updating incident:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+
 export const deleteIncident = async (req, res) => {
   try {
     const { id } = req.params;

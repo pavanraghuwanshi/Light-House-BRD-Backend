@@ -1,7 +1,7 @@
 import express from 'express';
 const router = express.Router();
 
-import { addIncident, getIncidents, updateIncident, deleteIncident} from '../Controllers/Incident.Controller.js';
+import { addIncident, getIncidents, updateIncident, deleteIncident, updateIncidentStatus} from '../Controllers/Incident.Controller.js';
 
 import authenticateUser from '../Middleware/authMiddleware.js';
 
@@ -16,6 +16,10 @@ router.get("/get-incidents", authenticateUser, getIncidents);
 
 // ✅ Update
 router.put("/update-incident/:id", authenticateUser, updateIncident);
+
+
+// ✅ Update
+router.put("/update-incident-status/:id", authenticateUser, updateIncidentStatus);
 
 // ✅ Delete
 router.delete("/delete-incident/:id", authenticateUser, deleteIncident);
