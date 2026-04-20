@@ -85,8 +85,15 @@ export const getIncidents = async (req, res) => {
 
     // ✅ Convert to ObjectId (VERY IMPORTANT)
     if (filter?.branchId) {
-      filter.branchId = new mongoose.Types.ObjectId(filter.branchId);
+      if (filter.branchId.$in) {
+        filter.branchId.$in = filter.branchId.$in.map(
+          (id) => new mongoose.Types.ObjectId(id)
+        );
+      } else {
+        filter.branchId = new mongoose.Types.ObjectId(filter.branchId);
+      }
     }
+
     if (filter?.schoolId) {
       filter.schoolId = new mongoose.Types.ObjectId(filter.schoolId);
     }
