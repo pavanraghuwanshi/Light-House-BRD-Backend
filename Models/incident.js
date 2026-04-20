@@ -14,7 +14,6 @@ const incidentSchema = new mongoose.Schema(
     },
     region: {
       type: String,
-      required: true,
     },
     category: {
       type: String,
