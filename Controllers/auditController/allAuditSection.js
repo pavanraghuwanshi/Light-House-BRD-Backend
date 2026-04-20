@@ -86,7 +86,10 @@ const SECTION_NAME_MAP = {
   "Hygiene, Housekeeping & Food Safety": "I"
 };
 
-
+// reverse map (code → name)
+const SECTION_CODE_TO_NAME = Object.fromEntries(
+  Object.entries(SECTION_NAME_MAP).map(([k, v]) => [v, k])
+);
 
 export const saveSection = async (req, res) => {
   try {
@@ -97,15 +100,19 @@ export const saveSection = async (req, res) => {
       return res.status(400).json({ message: "Invalid payload" });
     }
 
-    // 🔥 Convert sectionName → sectionCode
+    // 🔥 detect code
     const sectionCode =
-      AUDIT_CRITICAL_CONFIG[sectionName] 
-        ? sectionName // already A/B/C
+      AUDIT_CRITICAL_CONFIG[sectionName]
+        ? sectionName
         : SECTION_NAME_MAP[sectionName];
 
     if (!sectionCode) {
       return res.status(400).json({ message: "Invalid section name" });
     }
+
+    // 🔥 get proper display name
+    const finalSectionName =
+      SECTION_CODE_TO_NAME[sectionCode] || sectionName;
 
     const { schoolId } = resolveSchoolAndBranch(req);
 
@@ -122,7 +129,6 @@ export const saveSection = async (req, res) => {
       return res.status(403).json({ message: "Not allowed" });
     }
 
-    // ✅ Correct critical list
     const criticalList = AUDIT_CRITICAL_CONFIG[sectionCode] || [];
 
     let sectionScore = 0;
@@ -138,7 +144,6 @@ export const saveSection = async (req, res) => {
       const score = typeof p.score === "number" ? p.score : 0;
       sectionScore += score;
 
-      // 🔥 Strict backend logic
       if (isCritical && score !== 2) {
         isCriticalFailed = true;
       }
@@ -154,7 +159,7 @@ export const saveSection = async (req, res) => {
     });
 
     const section = await AuditSection.findOneAndUpdate(
-      { auditId, sectionName: sectionCode }, // 🔥 store code
+      { auditId, sectionName: finalSectionName }, // ✅ store full name
       {
         parameters: processedParams,
         sectionScore,
