@@ -271,6 +271,110 @@ export const getAudits = async (req, res) => {
 
 //  all section total persentage 
 
+// export const finalizeAudit = async (req, res) => {
+//   try {
+//     const { auditId } = req.params;
+
+//     const audit = await Audit.findById(auditId);
+//     if (!audit) {
+//       return res.status(404).json({ message: "Audit not found" });
+//     }
+
+//     // ❌ Already finalized
+//     if (audit.status === "completed") {
+//       return res.status(400).json({ message: "Already finalized" });
+//     }
+
+//     // ✅ Get all sections
+//     const sections = await AuditSection.find({ auditId });
+
+//     let totalWeightedScore = 0;
+//     let totalWeight = 0;
+
+//     let isAuditFailed = false;
+//     let failureReasons = [];
+
+//     let sectionWise = [];
+
+//     for (let section of sections) {
+//       const sectionName = section.sectionName;
+//       const weight = SECTION_WEIGHTS[sectionName] || 0;
+
+//       const criticalList = AUDIT_CRITICAL_CONFIG[sectionName] || [];
+
+//       let sectionMaxScore = section.parameters.length * 2;
+//       let sectionObtained = 0;
+
+//       section.parameters.forEach(p => {
+//         sectionObtained += p.score;
+
+//         // 🔥 CRITICAL FAIL CHECK
+//         if (
+//           criticalList.includes(p.name) &&
+//           p.isCompliant === false
+//         ) {
+//           isAuditFailed = true;
+//           failureReasons.push(`${sectionName} - ${p.name}`);
+//         }
+//       });
+
+//       const sectionPercentage =
+//         sectionMaxScore === 0
+//           ? 0
+//           : (sectionObtained / sectionMaxScore) * 100;
+
+//       const weightedScore = (sectionPercentage * weight) / 100;
+
+//       totalWeightedScore += weightedScore;
+//       totalWeight += weight;
+
+//       sectionWise.push({
+//         section: sectionName,
+//         weight,
+//         obtained: sectionObtained,
+//         max: sectionMaxScore,
+//         percentage: sectionPercentage.toFixed(2)
+//       });
+//     }
+
+//     const finalPercentage =
+//       totalWeight === 0
+//         ? 0
+//         : (totalWeightedScore / totalWeight) * 100;
+
+//     // 🔥 FINAL RESULT LOGIC
+//     let result = "PASS";
+
+//     if (isAuditFailed) {
+//       result = "FAIL";
+//     } else if (finalPercentage < 85) {
+//       result = "CONDITIONAL_PASS";
+//     }
+
+//     // ✅ Save in DB
+//     audit.status = "completed";
+//     audit.finalScore = finalPercentage.toFixed(2);
+//     audit.result = result;
+//     audit.failureReasons = failureReasons;
+
+//     await audit.save();
+
+//     return res.json({
+//       success: true,
+//       result,
+//       finalPercentage: finalPercentage.toFixed(2),
+//       failureReasons,
+//       sectionWise
+//     });
+
+//   } catch (err) {
+//     return res.status(400).json({
+//       success: false,
+//       message: err.message
+//     });
+//   }
+// };
+
 export const finalizeAudit = async (req, res) => {
   try {
     const { auditId } = req.params;
@@ -280,90 +384,100 @@ export const finalizeAudit = async (req, res) => {
       return res.status(404).json({ message: "Audit not found" });
     }
 
-    // ❌ Already finalized
-    if (audit.status === "completed") {
+    // ❌ Prevent re-finalize
+    if (audit.status === "completed" || audit.status === "failed") {
       return res.status(400).json({ message: "Already finalized" });
     }
 
-    // ✅ Get all sections
     const sections = await AuditSection.find({ auditId });
 
-    let totalWeightedScore = 0;
-    let totalWeight = 0;
+    if (!sections.length) {
+      return res.status(400).json({ message: "No sections found" });
+    }
 
-    let isAuditFailed = false;
-    let failureReasons = [];
+    let totalScore = 0;
+    let totalMaxScore = 0;
 
+    let criticalIssues = [];
     let sectionWise = [];
 
     for (let section of sections) {
-      const sectionName = section.sectionName;
-      const weight = SECTION_WEIGHTS[sectionName] || 0;
+      let sectionName = section.sectionName;
 
-      const criticalList = AUDIT_CRITICAL_CONFIG[sectionName] || [];
-
-      let sectionMaxScore = section.parameters.length * 2;
       let sectionObtained = 0;
+      let sectionMax = 0;
 
-      section.parameters.forEach(p => {
-        sectionObtained += p.score;
+      let sectionCriticalIssues = [];
 
-        // 🔥 CRITICAL FAIL CHECK
-        if (
-          criticalList.includes(p.name) &&
-          p.isCompliant === false
-        ) {
-          isAuditFailed = true;
-          failureReasons.push(`${sectionName} - ${p.name}`);
+      section.parameters.forEach((p) => {
+        const maxScore = p.maxScore || 2;
+
+        sectionObtained += (p.score || 0);
+        sectionMax += maxScore;
+
+        // 🔥 STRICT CRITICAL CHECK
+        if (p.isCritical && p.score !== maxScore) {
+          sectionCriticalIssues.push({
+            parameter: p.name,
+            expected: maxScore,
+            actual: p.score || 0
+          });
         }
       });
 
-      const sectionPercentage =
-        sectionMaxScore === 0
-          ? 0
-          : (sectionObtained / sectionMaxScore) * 100;
+      if (sectionCriticalIssues.length > 0) {
+        criticalIssues.push({
+          section: sectionName,
+          issues: sectionCriticalIssues
+        });
+      }
 
-      const weightedScore = (sectionPercentage * weight) / 100;
-
-      totalWeightedScore += weightedScore;
-      totalWeight += weight;
+      totalScore += sectionObtained;
+      totalMaxScore += sectionMax;
 
       sectionWise.push({
         section: sectionName,
-        weight,
         obtained: sectionObtained,
-        max: sectionMaxScore,
-        percentage: sectionPercentage.toFixed(2)
+        max: sectionMax,
+        percentage:
+          sectionMax === 0
+            ? 0
+            : ((sectionObtained / sectionMax) * 100).toFixed(2)
       });
     }
 
     const finalPercentage =
-      totalWeight === 0
+      totalMaxScore === 0
         ? 0
-        : (totalWeightedScore / totalWeight) * 100;
+        : (totalScore / totalMaxScore) * 100;
 
-    // 🔥 FINAL RESULT LOGIC
+    // 🔥 RESULT LOGIC
     let result = "PASS";
+    let status = "completed";
 
-    if (isAuditFailed) {
+    if (criticalIssues.length > 0) {
       result = "FAIL";
+      status = "failed"; // 👈 IMPORTANT
     } else if (finalPercentage < 85) {
       result = "CONDITIONAL_PASS";
     }
 
-    // ✅ Save in DB
-    audit.status = "completed";
-    audit.finalScore = finalPercentage.toFixed(2);
+    // ✅ SAVE ALWAYS (even FAIL)
+    audit.status = status;
     audit.result = result;
-    audit.failureReasons = failureReasons;
+    audit.finalScore = finalPercentage.toFixed(2);
+    audit.criticalIssues = criticalIssues;
+    audit.sectionWiseScore = sectionWise;
+    audit.completedAt = new Date();
 
     await audit.save();
 
     return res.json({
       success: true,
       result,
+      status,
       finalPercentage: finalPercentage.toFixed(2),
-      failureReasons,
+      criticalIssues,
       sectionWise
     });
 
@@ -374,7 +488,6 @@ export const finalizeAudit = async (req, res) => {
     });
   }
 };
-
 
 
 

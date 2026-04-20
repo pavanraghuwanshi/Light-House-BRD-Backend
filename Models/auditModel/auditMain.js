@@ -3,7 +3,7 @@ import { dbConnections } from "../../Database/db.js";
 
 const auditSchema = new mongoose.Schema({
   schoolId: mongoose.Schema.Types.ObjectId,
-  branchId:mongoose.Schema.Types.ObjectId,
+  branchId: mongoose.Schema.Types.ObjectId,
   regionId: mongoose.Schema.Types.ObjectId,
 
   createdBy: mongoose.Schema.Types.ObjectId,
@@ -11,18 +11,44 @@ const auditSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["draft", "completed"],
+    enum: ["draft", "completed", "failed"], // ✅ added failed
     default: "draft"
   },
 
-  totalScore: Number,
-  percentage: Number,
   result: {
     type: String,
     enum: ["PASS", "CONDITIONAL_PASS", "FAIL"]
   },
 
-  criticalFailed: Boolean
+  finalScore: { // ✅ consistent naming
+    type: Number
+  },
+
+  // 🔥 Detailed failure tracking
+  criticalIssues: [
+    {
+      section: String,
+      issues: [
+        {
+          parameter: String,
+          expected: Number,
+          actual: Number
+        }
+      ]
+    }
+  ],
+
+  // 📊 Section-wise breakdown
+  sectionWiseScore: [
+    {
+      section: String,
+      obtained: Number,
+      max: Number,
+      percentage: String
+    }
+  ],
+
+  completedAt: Date,
 
 }, { timestamps: true });
 
