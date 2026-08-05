@@ -17,16 +17,9 @@ const branchSchema = new mongoose.Schema({
     ref: 'School',
     required: true
   },
-  mobileNo:{
+  mobileNo: {
     type: String,
-    // required: [true, 'Contact number is required'],
-    match: [/^\d{10}$/, 'Contact number must be 10 digits'],
-    validate: {
-      validator: function (v) {
-        return /^[6-9]\d{9}$/.test(v);
-      },
-      message: props => `${props.value} is not a valid contact number!`
-    }
+    default: ''
   },
 username: {
   type: String,
@@ -42,6 +35,11 @@ username: {
   fullAccess: {
     type: Boolean,
     default: false
+  },
+  fas: {
+    type: Number,
+    required: true,
+    unique: true
   },
   email:{
     type: String,

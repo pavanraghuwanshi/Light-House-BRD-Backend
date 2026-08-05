@@ -1,9 +1,12 @@
 import express from "express";
+import multer from "multer";
 import {  addBranch,getBranches,updateBranch,deleteBranch,grantSchoolBranchAccess,addMultipleBranches,getBranchesDropdown,getTodayExpiredBranches,  } from "../Controllers/Branch.Controller.js";
 import authenticateUser from "../Middleware/authMiddleware.js";
 
+const upload = multer({ storage: multer.memoryStorage() });
+
 const router = express.Router();
-router.post("/add-multiple-branches/:id",authenticateUser,addMultipleBranches);
+router.post("/add-multiple-branches/:id?", authenticateUser, upload.any(), addMultipleBranches);
 router.post("/branch", authenticateUser, addBranch);
 router.get("/branch", authenticateUser, getBranches);
 router.get("/branch/dropdown", authenticateUser, getBranchesDropdown);
