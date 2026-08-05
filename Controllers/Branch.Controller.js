@@ -99,23 +99,43 @@ export const addBranch = async (req, res) => {
 export const getBranches = async (req, res) => {
   const { id, AssignedBranch } = req.user;
   const { role } = req.user;
+  const { fas, search } = req.query;
 
   const ObjectId = mongoose.Types.ObjectId;
   let Branches;
 
   try {
+    let queryFilter = {};
+
+    if (fas !== undefined && fas !== "") {
+      const fasNumber = Number(fas);
+      if (!isNaN(fasNumber)) {
+        queryFilter.fas = fasNumber;
+      }
+    } else if (search) {
+      const fasNumber = Number(search);
+      if (!isNaN(fasNumber)) {
+        queryFilter.$or = [
+          { fas: fasNumber },
+          { branchName: { $regex: search, $options: "i" } },
+        ];
+      } else {
+        queryFilter.branchName = { $regex: search, $options: "i" };
+      }
+    }
+
     if (role === "superAdmin") {
-      Branches = await Branch.find().select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v").populate("schoolId", "schoolName");
+      Branches = await Branch.find(queryFilter)
+        .select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v")
+        .populate("schoolId", "schoolName");
     } else if (role === "school") {
-      Branches = await Branch.find({ schoolId: new ObjectId(id) }).select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v").populate(
-        "schoolId",
-        "schoolName"
-      );
+      Branches = await Branch.find({ ...queryFilter, schoolId: new ObjectId(id) })
+        .select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v")
+        .populate("schoolId", "schoolName");
     } else if (role === "branchGroup") {
-      Branches = await Branch.find({ _id: { $in: AssignedBranch } }).select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v").populate(
-        "schoolId",
-        "schoolName"
-      );
+      Branches = await Branch.find({ ...queryFilter, _id: { $in: AssignedBranch } })
+        .select("-fcmToken -lastNotifiedDate -notificationsEnabled -__v")
+        .populate("schoolId", "schoolName");
     }
     if (!Branches) {
       return res.status(404).json({ message: "Branches not found" });
@@ -133,21 +153,19 @@ export const getBranches = async (req, res) => {
 };
 
 export const getBranchesDropdown = async (req, res) => {
-  const { role, id, AssignedBranch } = req.user;
-  const { schoolId } = req.query;
+  const { role, id, schoolId: tokenSchoolId, AssignedBranch } = req.user;
+  const { schoolId: querySchoolId, fas, search } = req.query;
+  const schoolId = tokenSchoolId || querySchoolId;
 
   try {
     let filter = {};
     if (role === "superAdmin") {
-      if (!schoolId) {
-        return res.status(400).json({
-          success: false,
-          message: "schoolId is required for superAdmin",
-        });
+      if (schoolId) {
+        filter.schoolId = new mongoose.Types.ObjectId(schoolId);
       }
-      filter.schoolId = new mongoose.Types.ObjectId(schoolId);
     } else if (role === "school") {
-      filter.schoolId = new mongoose.Types.ObjectId(id);
+      const targetSchoolId = schoolId || id;
+      filter.schoolId = new mongoose.Types.ObjectId(targetSchoolId);
     } else if (role === "branchGroup") {
       filter._id = { $in: AssignedBranch };
     } else if (role === "branch") {
@@ -162,8 +180,25 @@ export const getBranchesDropdown = async (req, res) => {
       });
     }
 
+    if (fas !== undefined && fas !== "") {
+      const fasNumber = Number(fas);
+      if (!isNaN(fasNumber)) {
+        filter.fas = fasNumber;
+      }
+    } else if (search) {
+      const fasNumber = Number(search);
+      if (!isNaN(fasNumber)) {
+        filter.$or = [
+          { fas: fasNumber },
+          { branchName: { $regex: search, $options: "i" } },
+        ];
+      } else {
+        filter.branchName = { $regex: search, $options: "i" };
+      }
+    }
+
     const branches = await Branch.find(filter)
-      .select("_id branchName")
+      .select("_id branchName fas")
       .sort({ branchName: 1 });
 
     res.status(200).json({
