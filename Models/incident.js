@@ -26,38 +26,11 @@ const incidentSchema = new mongoose.Schema(
     },
     subCategory: {
       type: String,
-      enum: [
-        "Fire",
-        "Infrastructure",
-        "Transport",
-        "Behavioural",
-        "Classroom",
-        "Play Area",
-        "Laboratory",
-        "Electrical",
-        "Unattended Children",
-        "CCTV",
-        "BGV",
-        "Health & Hygiene",
-        "Bullying",
-        "Theft",
-        "Other",
-      ],
       required: true,
     },
     stakeholders: [
       {
         type: String,
-        enum: [
-          "Operations HO",
-          "OPS-Infra",
-          "Projects",
-          "Principal",
-          "Head School Operations",
-          "RSO",
-          "Child Counsellor",
-          "Transport Manager",
-        ],
       },
     ],
     briefDescription: String,
@@ -70,7 +43,7 @@ const incidentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Open", "In Progress", "Closed"],
+      enum: ["Open", "In Progress", "In-Progress", "Resolved", "Closed", "Close"],
       default: "Open",
     },
     escalationStatus: {
