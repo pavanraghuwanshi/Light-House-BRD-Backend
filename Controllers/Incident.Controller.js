@@ -19,6 +19,7 @@ export const addIncident = async (req, res) => {
       email,
       region,
       category,
+      severity,
       reportedBy,
       subCategory,
       stakeholders,
@@ -37,6 +38,7 @@ export const addIncident = async (req, res) => {
       email,
       region,
       category,
+      severity,
       reportedBy,
       subCategory,
       stakeholders,
@@ -253,7 +255,7 @@ export const updateIncidentStatus = async (req, res) => {
     }
 
     // validate status
-    const allowedStatus = ["Open", "In Progress", "Closed"];
+    const allowedStatus = ["Open", "In Progress", "In-Progress", "Resolved", "Closed", "Close"];
     if (status && !allowedStatus.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -277,7 +279,7 @@ export const updateIncidentStatus = async (req, res) => {
     if (escalatedTo) incident.escalatedTo = escalatedTo;
 
     // auto set closure date when closed
-    if (status === "Closed") {
+    if (status === "Closed" || status === "Close") {
       incident.closureDate = closureDate || new Date();
     }
 

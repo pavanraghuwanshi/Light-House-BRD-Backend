@@ -20,6 +20,11 @@ const incidentSchema = new mongoose.Schema(
       enum: ["Incident", "Near Miss", "Hazard & Risk"],
       required: true,
     },
+    severity: {
+      type: String,
+      enum: ["Low", "Medium", "High", "Critical", "low", "medium", "high", "critical"],
+      default: "Low",
+    },
     reportedBy: {
       type: String,
       required: true,
