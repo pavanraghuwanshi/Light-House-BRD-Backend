@@ -76,7 +76,7 @@ export const addIncident = async (req, res) => {
 
 export const getIncidents = async (req, res) => {
   try {
-    let { page = 1, limit = 10, search = "" } = req.query;
+    let { page = 1, limit = 10, search = "", status = "", region = "" } = req.query;
 
     page = Math.max(1, parseInt(page));
     limit = Math.max(1, parseInt(limit));
@@ -84,6 +84,18 @@ export const getIncidents = async (req, res) => {
 
     // ✅ Role-based filter
     let filter = buildQueryWithRole(req);
+
+    if (status && status.toLowerCase() !== "all") {
+      if (status === "In-Progress" || status === "In Progress") {
+        filter.status = { $in: ["In-Progress", "In Progress"] };
+      } else {
+        filter.status = { $regex: "^" + status + "$", $options: "i" };
+      }
+    }
+
+    if (region && region.toLowerCase() !== "all") {
+      filter.region = { $regex: "^" + region + "$", $options: "i" };
+    }
 
     // ✅ Convert to ObjectId (VERY IMPORTANT)
     if (filter?.branchId) {
@@ -192,9 +204,6 @@ export const getIncidents = async (req, res) => {
     });
   }
 };
-
-
-
 
 export const updateIncident = async (req, res) => {
   try {
