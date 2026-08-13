@@ -78,8 +78,12 @@ export const getIncidents = async (req, res) => {
   try {
     let { page = 1, limit = 10, search = "", status = "", region = "" } = req.query;
 
-    page = Math.max(1, parseInt(page));
-    limit = Math.max(1, parseInt(limit));
+    page = Math.max(1, parseInt(page) || 1);
+    if (limit === "all" || limit === "All" || limit === 0 || limit === "0") {
+      limit = 1000000;
+    } else {
+      limit = Math.max(1, parseInt(limit) || 10);
+    }
     const skip = (page - 1) * limit;
 
     // ✅ Role-based filter
