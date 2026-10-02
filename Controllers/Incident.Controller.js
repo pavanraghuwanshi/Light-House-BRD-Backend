@@ -1,7 +1,23 @@
-import Incident from "../Models/incident.js";
+import Incident, {
+  normalizeCategory,
+  normalizeRegion,
+  normalizeSeverity,
+  normalizeStatus,
+} from "../Models/incident.js";
 import School from "../Models/school.js";
-import {buildQueryWithRole, resolveSchoolAndBranch } from "../Utils/roleResolver.js"
+import { buildQueryWithRole, resolveSchoolAndBranch } from "../Utils/roleResolver.js";
 import mongoose from "mongoose";
+import {
+  parseDashboardDateRange,
+  parseDashboardMonth,
+  buildEffectiveDateFilter,
+  getRegionVariants,
+  getCategoryVariants,
+  safeObjectId,
+  buildFacetPipeline,
+  formatDashboardResponse,
+  parseMongoExplainStats,
+} from "../Utils/dashboardHelpers.js";
 
 
 export const addIncident = async (req, res) => {
@@ -341,6 +357,185 @@ export const deleteIncident = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: err.message,
+    });
+  }
+};
+
+// ✅ Incident Dashboard / Stats (Total Incidents, Open Cases, High/Critical, Closure Rate)
+export const getIncidentDashboard = async (req, res) => {
+  try {
+    // 1. Role-based filter
+    let filter;
+    try {
+      filter = buildQueryWithRole(req);
+    } catch (roleErr) {
+      return res.status(403).json({
+        success: false,
+        message: roleErr.message || "Unauthorized access.",
+      });
+    }
+
+    // Remove status from base filter so summary cards reflect overall totals
+    delete filter.status;
+
+    // 2. Direct Matching for Region & Category using indexed variants (no regex)
+    if (filter.region) {
+      if (String(filter.region).trim().toLowerCase() === "all") {
+        delete filter.region;
+      } else {
+        filter.region = { $in: getRegionVariants(filter.region) };
+      }
+    }
+
+    if (filter.category) {
+      if (String(filter.category).trim().toLowerCase() === "all") {
+        delete filter.category;
+      } else {
+        filter.category = { $in: getCategoryVariants(filter.category) };
+      }
+    }
+
+    // 3. Validate incoming date and month filters and standardize timezone handling
+    const { startDate, endDate, month } = req.query;
+    if (month && String(month).trim().toLowerCase() !== "all") {
+      const parsedMonth = parseDashboardMonth(month);
+      if (parsedMonth?.error) {
+        return res.status(400).json({
+          success: false,
+          message: parsedMonth.error,
+        });
+      }
+      if (parsedMonth) {
+        const dateFilter = buildEffectiveDateFilter(parsedMonth.start, parsedMonth.end);
+        if (dateFilter) {
+          if (filter.$or) {
+            filter.$and = filter.$and || [];
+            filter.$and.push({ $or: filter.$or }, dateFilter);
+            delete filter.$or;
+          } else {
+            filter.$or = dateFilter.$or;
+          }
+        }
+      }
+    } else if (startDate !== undefined || endDate !== undefined) {
+      const { start, end, error: dateError } = parseDashboardDateRange(startDate, endDate);
+      if (dateError) {
+        return res.status(400).json({
+          success: false,
+          message: dateError,
+        });
+      }
+
+      const dateFilter = buildEffectiveDateFilter(start, end);
+      if (dateFilter) {
+        if (filter.$or) {
+          filter.$and = filter.$and || [];
+          filter.$and.push({ $or: filter.$or }, dateFilter);
+          delete filter.$or;
+        } else {
+          filter.$or = dateFilter.$or;
+        }
+      }
+
+      delete filter.startDate;
+      delete filter.endDate;
+    }
+    delete filter.month;
+
+    // 4. Safely validate and convert IDs to ObjectId
+    if (filter?.branchId) {
+      if (filter.branchId.$in) {
+        const converted = [];
+        for (const id of filter.branchId.$in) {
+          const casted = safeObjectId(id);
+          if (!casted) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid branchId format: ${id}`,
+            });
+          }
+          converted.push(casted);
+        }
+        filter.branchId.$in = converted;
+      } else {
+        const casted = safeObjectId(filter.branchId);
+        if (!casted) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid branchId format: ${filter.branchId}`,
+          });
+        }
+        filter.branchId = casted;
+      }
+    }
+
+    if (filter?.schoolId) {
+      const casted = safeObjectId(filter.schoolId);
+      if (!casted) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid schoolId format: ${filter.schoolId}`,
+        });
+      }
+      filter.schoolId = casted;
+    }
+
+    if (filter?.parentId) {
+      const casted = safeObjectId(filter.parentId);
+      if (!casted) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid parentId format: ${filter.parentId}`,
+        });
+      }
+      filter.parentId = casted;
+    }
+
+    // 5. Build optimized single-pass $facet aggregation pipeline
+    const pipeline = buildFacetPipeline(filter);
+
+    // 6. Benchmark using .explain("executionStats") if authorized
+    const isAuthorizedForExplain =
+      req.user?.role === "superAdmin" || process.env.NODE_ENV !== "production";
+    const shouldExplain =
+      isAuthorizedForExplain &&
+      (req.query.explain === "true" || req.query.benchmark === "true");
+
+    let executionStats = undefined;
+    if (shouldExplain) {
+      try {
+        const explainResult = await Incident.aggregate(pipeline, { allowDiskUse: true }).explain("executionStats");
+        executionStats = parseMongoExplainStats(explainResult);
+      } catch (explainErr) {
+        console.warn("Dashboard explain benchmark error:", explainErr.message);
+      }
+    }
+
+    // 7. Execute single-pass aggregation
+    const results = await Incident.aggregate(pipeline, { allowDiskUse: true });
+
+    // 8. Format structured dashboard response
+    const dashboardData = formatDashboardResponse(results);
+
+    const response = {
+      success: true,
+      data: dashboardData,
+    };
+
+    if (executionStats) {
+      response.benchmark = executionStats;
+    }
+
+    return res.status(200).json(response);
+
+  } catch (err) {
+    console.error("GET INCIDENT DASHBOARD ERROR:", err);
+    const isProd = process.env.NODE_ENV === "production";
+    return res.status(err.status || 500).json({
+      success: false,
+      message: isProd
+        ? "An internal server error occurred while generating the incident dashboard."
+        : err.message,
     });
   }
 };
