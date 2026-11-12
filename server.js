@@ -17,6 +17,7 @@ import supervisorRoute from "./Routes/supervisor.route.js";
 import driverRoute from "./Routes/driver.route.js";
 import auditRoute from "./Routes/audit.route.js";
 import incidentRoute from "./Routes/incident.route.js";
+import prekUserRoute from "./Routes/prekUser.route.js";
 
 
 
@@ -66,6 +67,7 @@ app.use("/api", driverRoute);
 app.use("/auth", userRoute);
 app.use("/api", incidentRoute);
 app.use("/api", auditRoute);
+app.use("/api", prekUserRoute);
 
 
 

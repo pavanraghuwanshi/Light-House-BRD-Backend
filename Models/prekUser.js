@@ -1,0 +1,99 @@
+import mongoose from "mongoose";
+import { dbConnections } from "../Database/db.js";
+import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
+
+const prekUserSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    password: {
+      type: String,
+      required: true,
+    },
+    role: {
+      type: String,
+      required: true,
+      enum: [
+        PREK_ROLES.AOM,
+        PREK_ROLES.BM,
+        PREK_ROLES.RSO,
+        PREK_ROLES.NATIONAL_HEAD,
+        PREK_ROLES.CENTRAL,
+      ],
+      set: (val) => normalizePrekRole(val) || val,
+      index: true,
+    },
+    zone: {
+      type: String,
+      trim: true,
+      index: true, // "North", "South", "East", "West", "Central"
+    },
+    cluster: {
+      type: String,
+      trim: true, // Business Manager cluster
+    },
+    centres: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    failedLoginAttempts: {
+      type: Number,
+      default: 0,
+    },
+    isLocked: {
+      type: Boolean,
+      default: false,
+    },
+    lockUntil: {
+      type: Date,
+      default: null,
+    },
+    lastLoginAt: {
+      type: Date,
+    },
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpires: {
+      type: Date,
+    },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  }
+);
+
+prekUserSchema.index({ role: 1, zone: 1 });
+prekUserSchema.index({ role: 1, cluster: 1 });
+
+const PrekUser = dbConnections.db2?.model
+  ? dbConnections.db2.model("PrekUser", prekUserSchema)
+  : mongoose.model("PrekUser", prekUserSchema);
+
+export default PrekUser;
