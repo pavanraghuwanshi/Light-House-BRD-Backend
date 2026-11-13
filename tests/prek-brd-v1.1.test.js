@@ -91,6 +91,105 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       const filter = buildQueryWithRole(req);
       assert.deepEqual(filter.centreName, { $in: ["Kothrud Centre", "Baner Centre"] });
     });
+
+    it("FR-1.3 Peer Isolation: Two AOMs at the same level CANNOT view each other's reports", () => {
+      const reqAOM1 = {
+        user: {
+          id: "aom-1-id",
+          role: "AOM",
+          centres: ["Centre North-A", "Centre North-B"],
+        },
+        query: {},
+      };
+      const reqAOM2 = {
+        user: {
+          id: "aom-2-id",
+          role: "AOM",
+          centres: ["Centre North-C", "Centre North-D"],
+        },
+        query: {},
+      };
+
+      const filterAOM1 = buildQueryWithRole(reqAOM1);
+      const filterAOM2 = buildQueryWithRole(reqAOM2);
+
+      // AOM 1 can only query their own centres
+      assert.deepEqual(filterAOM1.centreName, { $in: ["Centre North-A", "Centre North-B"] });
+      // AOM 2 can only query their own centres
+      assert.deepEqual(filterAOM2.centreName, { $in: ["Centre North-C", "Centre North-D"] });
+
+      // Cross-verification: AOM 1's filter strictly excludes AOM 2's centres
+      const aom2ReportCentre = "Centre North-C";
+      assert.equal(
+        filterAOM1.centreName.$in.includes(aom2ReportCentre),
+        false,
+        "AOM 1 MUST NOT be able to view AOM 2's incident reports"
+      );
+
+      // Cross-verification: AOM 2's filter strictly excludes AOM 1's centres
+      const aom1ReportCentre = "Centre North-A";
+      assert.equal(
+        filterAOM2.centreName.$in.includes(aom1ReportCentre),
+        false,
+        "AOM 2 MUST NOT be able to view AOM 1's incident reports"
+      );
+    });
+
+    it("FR-1.3 Safe Default: An AOM without assigned centres is restricted to empty array and cannot view peer reports", () => {
+      const reqUnassignedAOM = {
+        user: {
+          id: "unassigned-aom-id",
+          role: "AOM",
+          centres: [],
+        },
+        query: {},
+      };
+      const filter = buildQueryWithRole(reqUnassignedAOM);
+      assert.deepEqual(
+        filter.centreName,
+        { $in: [] },
+        "Unassigned AOM must have an empty match condition to prevent viewing any incident reports"
+      );
+    });
+
+    it("FR-1.3 Hierarchy Visibility: Only above hierarchy (BM, RSO, National Head, Central) can view reports across centres", () => {
+      // 1. Business Manager supervising the cluster
+      const reqBM = {
+        user: {
+          role: "BM",
+          cluster: "North-Cluster-1",
+          centres: ["Centre North-A", "Centre North-B", "Centre North-C"],
+        },
+        query: {},
+      };
+      const filterBM = buildQueryWithRole(reqBM);
+      assert.ok(filterBM.$or, "BM should have cluster-level scope");
+
+      // 2. Regional Safety Officer supervising the zone
+      const reqRSO = {
+        user: {
+          role: "RSO",
+          zone: "North",
+        },
+        query: {},
+      };
+      const filterRSO = buildQueryWithRole(reqRSO);
+      assert.ok(filterRSO.$or, "RSO has full zone scope");
+
+      // 3. National Head has national scope
+      const reqNationalHead = {
+        user: { role: "National Head" },
+        query: {},
+      };
+      assert.deepEqual(buildQueryWithRole(reqNationalHead), {});
+
+      // 4. Central has national scope
+      const reqCentral = {
+        user: { role: "Central" },
+        query: {},
+      };
+      assert.deepEqual(buildQueryWithRole(reqCentral), {});
+    });
   });
 
   describe("2. Fixed Escalation Matrix & SLA Rules (BRD Section 8, FR-5.1)", () => {

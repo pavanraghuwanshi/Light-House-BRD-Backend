@@ -48,6 +48,9 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
       filter.centreName = { $in: req.user.centres };
     } else if (req.user?.area) {
       filter.centreName = req.user.area;
+    } else {
+      // AOM without assigned centres cannot view peer or other centres' incidents
+      filter.centreName = { $in: [] };
     }
   } else {
     throw new Error("You are not authorized to perform this action.");

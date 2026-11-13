@@ -173,40 +173,54 @@ export const getIncidents = async (req, res) => {
     const skip = (page - 1) * limit;
 
     // 5-Tier Role Scoping Filter (FR-1.3)
-    let filter = buildQueryWithRole(req);
+    const roleFilter = buildQueryWithRole(req);
+    const andConditions = [];
+
+    if (Object.keys(roleFilter).length > 0) {
+      andConditions.push(roleFilter);
+    }
 
     if (status && status.toLowerCase() !== "all") {
       if (status === "In-Progress" || status === "In Progress") {
-        filter.status = { $in: ["In-Progress", "In Progress"] };
+        andConditions.push({ status: { $in: ["In-Progress", "In Progress"] } });
       } else {
-        filter.status = { $regex: "^" + status + "$", $options: "i" };
+        andConditions.push({ status: { $regex: "^" + status + "$", $options: "i" } });
       }
     }
 
     const targetZone = zone || region;
     if (targetZone && targetZone.toLowerCase() !== "all") {
-      filter.$or = filter.$or || [];
-      filter.$or.push(
-        { zone: { $regex: "^" + targetZone + "$", $options: "i" } },
-        { region: { $regex: "^" + targetZone + "$", $options: "i" } }
-      );
+      andConditions.push({
+        $or: [
+          { zone: { $regex: "^" + targetZone + "$", $options: "i" } },
+          { region: { $regex: "^" + targetZone + "$", $options: "i" } },
+        ],
+      });
     }
 
-    // FR-7.1: Multi-field search
+    // FR-7.1: Multi-field search (isolated from role boundary conditions)
     if (search) {
       const searchRegex = { $regex: search, $options: "i" };
-      filter.$or = filter.$or || [];
-      filter.$or.push(
-        { caseId: searchRegex },
-        { description: searchRegex },
-        { briefDescription: searchRegex },
-        { incidentType: searchRegex },
-        { reporterName: searchRegex },
-        { reportedBy: searchRegex },
-        { centreName: searchRegex },
-        { state: searchRegex }
-      );
+      andConditions.push({
+        $or: [
+          { caseId: searchRegex },
+          { description: searchRegex },
+          { briefDescription: searchRegex },
+          { incidentType: searchRegex },
+          { reporterName: searchRegex },
+          { reportedBy: searchRegex },
+          { centreName: searchRegex },
+          { state: searchRegex },
+        ],
+      });
     }
+
+    const filter =
+      andConditions.length === 0
+        ? {}
+        : andConditions.length === 1
+        ? andConditions[0]
+        : { $and: andConditions };
 
     const [incidents, total] = await Promise.all([
       Incident.find(filter)
@@ -249,11 +263,12 @@ export const updateIncidentStatus = async (req, res) => {
       ? { _id: new mongoose.Types.ObjectId(id) }
       : { caseId: id };
 
-    const incident = await Incident.findOne(query);
+    const filter = buildQueryWithRole(req, query);
+    const incident = await Incident.findOne(filter);
     if (!incident) {
       return res.status(404).json({
         success: false,
-        message: "Incident not found.",
+        message: "Incident not found or not authorized.",
       });
     }
 
