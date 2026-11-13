@@ -1,48 +1,17 @@
-import Superadmin from "../Models/superAdmin.js";
-import School from "../Models/school.js";
-import BranchGroup from "../Models/branchGroup.js";
-import Branch from "../Models/branch.js";
-import Parents from "../Models/parents.js";
-import Supervisor from "../Models/supervisor.js";
-import Driver from "../Models/driver.js";
-import PrekUser from "../Models/prekUser.js";
+import User from "../Models/user.js";
 import jwt from "jsonwebtoken";
 import { comparePassword, encrypt } from "../Utils/crypto.js";
-import admin from "../config/firebaseadmin.js";
 import authCache from "../Utils/authCache.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
 import recordAuditLog from "../Utils/auditLogger.js";
 
-// Add SuperAdmin
-export const addAdmin = async (req, res) => {
-  try {
-    let { username, email, password } = req.body;
-
-    username = username.trim();
-    email = email.trim();
-    password = password.trim();
-
-    const newUser = new Superadmin({
-      username,
-      email,
-      password: encrypt(password),
-    });
-
-    const savedUser = await newUser.save();
-    res
-      .status(201)
-      .json({ message: "User created successfully", user: savedUser });
-  } catch (error) {
-    console.error("Error adding user:", error);
-    res.status(500).json({ error: "Failed to create user" });
-  }
-};
-
 /**
- * FR-1.1, FR-1.2, FR-1.5, FR-1.6: Unified User Login
- * Supports Pre-K 5-tier role hierarchy: AOM, BM, RSO, National Head, Central
- * Supports account lockout after 5 failed attempts (FR-1.6)
- * Logs audit trail for all attempts (FR-1.5)
+ * FR-1.1, FR-1.2, FR-1.5, FR-1.6: Pre-K User Login Controller
+ * Individual role-based logins for ~94 users across the 5 roles:
+ * Area Operations Manager (AOM), Business Manager (BM), Regional Safety Officer (RSO),
+ * National Head, and Central (All-Activity Admin).
+ * - Enforces account lockout after 5 failed login attempts (FR-1.6).
+ * - Logs all login attempts to audit trail (FR-1.5).
  */
 export const loginUser = async (req, res) => {
   let { username, password } = req.body;
@@ -50,158 +19,16 @@ export const loginUser = async (req, res) => {
   password = password?.trim();
 
   if (!username || !password) {
-    return res.status(400).json({ success: false, message: "Please enter valid details" });
+    return res.status(400).json({ success: false, message: "Username/email and password are required." });
   }
 
   try {
-    // 1. Check Pre-K User Collection first (FR-1.1, FR-1.2)
-    const prekUser = await PrekUser.findOne({
+    const user = await User.findOne({
       $or: [
         { username: username.toLowerCase() },
         { email: username.toLowerCase() },
       ],
     });
-
-    if (prekUser) {
-      // FR-1.6: Account Lockout Check
-      if (prekUser.isLocked) {
-        if (prekUser.lockUntil && prekUser.lockUntil > new Date()) {
-          const minutesLeft = Math.ceil((prekUser.lockUntil.getTime() - Date.now()) / (60 * 1000));
-          return res.status(403).json({
-            success: false,
-            message: `Account is locked due to multiple failed login attempts. Please try again in ${minutesLeft} minutes or reset your password. (FR-1.6)`,
-          });
-        } else if (prekUser.lockUntil && prekUser.lockUntil <= new Date()) {
-          // Lock period expired
-          prekUser.isLocked = false;
-          prekUser.failedLoginAttempts = 0;
-          prekUser.lockUntil = null;
-          await prekUser.save();
-        } else {
-          return res.status(403).json({
-            success: false,
-            message: "Account is locked. Please contact Central administrator or use password reset. (FR-1.6)",
-          });
-        }
-      }
-
-      if (!prekUser.isActive) {
-        return res.status(403).json({
-          success: false,
-          message: "Your account is inactive. Please contact the administrator.",
-        });
-      }
-
-      const isMatch = await comparePassword(password, prekUser.password);
-      if (!isMatch) {
-        prekUser.failedLoginAttempts = (prekUser.failedLoginAttempts || 0) + 1;
-        const attemptsRemaining = Math.max(0, 5 - prekUser.failedLoginAttempts);
-
-        if (prekUser.failedLoginAttempts >= 5) {
-          prekUser.isLocked = true;
-          prekUser.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 mins
-          await prekUser.save();
-
-          await recordAuditLog({
-            req,
-            userId: prekUser._id,
-            username: prekUser.username,
-            userRole: prekUser.role,
-            action: "ACCOUNT_LOCKED",
-            entityType: "User",
-            entityId: prekUser._id,
-            details: { reason: "5 consecutive failed login attempts" },
-          });
-
-          return res.status(403).json({
-            success: false,
-            message: "Account locked: 5 consecutive failed login attempts reached. Please reset password or contact administrator. (FR-1.6)",
-          });
-        }
-
-        await prekUser.save();
-
-        await recordAuditLog({
-          req,
-          username: prekUser.username,
-          userRole: prekUser.role,
-          action: "LOGIN_FAILED",
-          entityType: "Auth",
-          details: { attemptsRemaining },
-        });
-
-        return res.status(400).json({
-          success: false,
-          message: `Incorrect password. ${attemptsRemaining} attempts remaining before account lockout.`,
-        });
-      }
-
-      // Successful login
-      prekUser.failedLoginAttempts = 0;
-      prekUser.isLocked = false;
-      prekUser.lockUntil = null;
-      prekUser.lastLoginAt = new Date();
-      await prekUser.save();
-
-      const tokenPayload = {
-        id: prekUser._id,
-        name: prekUser.name,
-        username: prekUser.username,
-        email: prekUser.email,
-        role: prekUser.role,
-        zone: prekUser.zone,
-        cluster: prekUser.cluster,
-        centres: prekUser.centres,
-        loginAccess: true,
-      };
-
-      const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
-      const token = jwt.sign(tokenPayload, secret, { expiresIn: "7d" });
-      authCache.set(prekUser._id.toString(), tokenPayload);
-
-      await recordAuditLog({
-        req,
-        userId: prekUser._id,
-        username: prekUser.username,
-        userRole: prekUser.role,
-        action: "LOGIN_SUCCESS",
-        entityType: "Auth",
-        details: { role: prekUser.role, zone: prekUser.zone },
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: "Successful Login",
-        token,
-        role: prekUser.role,
-        username: prekUser.username,
-        name: prekUser.name,
-        zone: prekUser.zone,
-        cluster: prekUser.cluster,
-        centres: prekUser.centres,
-      });
-    }
-
-    // 2. Legacy fallback
-    const [
-      superAdmin,
-      school,
-      branch,
-      branchGroup,
-      parent,
-      supervisor,
-      driver,
-    ] = await Promise.all([
-      Superadmin.findOne({ username }).lean(),
-      School.findOne({ username }).lean().select("-fcmToken -updatedAt -createdAt -Notification -mobileNo"),
-      Branch.findOne({ username }).populate("schoolId", "username").lean().select("-fcmToken -lastNotifiedDate -notificationsEnabled -lastNotifiedDate -subscriptionExpirationDate -mobileNo -Notification"),
-      BranchGroup.findOne({ username }).populate("AssignedBranch", "username").lean().select("-fcmToken -updatedAt -createdAt -Notification -mobileNo"),
-      Parents.findOne({ username }).lean().select("-fcmToken -updatedAt -createdAt -Notification -mobileNo -email"),
-      Supervisor.findOne({ username }).lean().select("-fcmToken -updatedAt -createdAt -Notification -mobileNo -email"),
-      Driver.findOne({ username }).lean().select("-fcmToken -updatedAt -createdAt -Notification -mobileNo -email"),
-    ]);
-
-    const user = superAdmin || school || branch || branchGroup || parent || supervisor || driver;
 
     if (!user) {
       await recordAuditLog({
@@ -210,54 +37,103 @@ export const loginUser = async (req, res) => {
         action: "LOGIN_FAILED_UNKNOWN_USER",
         entityType: "Auth",
       });
-      return res.status(400).json({ success: false, message: "Invalid credentials" });
+      return res.status(400).json({ success: false, message: "Invalid credentials." });
     }
 
-    const isSuperAdmin = user?.role === "superAdmin";
+    // FR-1.6: Account Lockout Check
+    if (user.isLocked) {
+      if (user.lockUntil && user.lockUntil > new Date()) {
+        const minutesLeft = Math.ceil((user.lockUntil.getTime() - Date.now()) / (60 * 1000));
+        return res.status(403).json({
+          success: false,
+          message: `Account is locked due to multiple failed login attempts. Please try again in ${minutesLeft} minutes or reset your password. (FR-1.6)`,
+        });
+      } else if (user.lockUntil && user.lockUntil <= new Date()) {
+        // Lock duration expired
+        user.isLocked = false;
+        user.failedLoginAttempts = 0;
+        user.lockUntil = null;
+        await user.save();
+      } else {
+        return res.status(403).json({
+          success: false,
+          message: "Account is locked. Please contact Central administrator or use password reset. (FR-1.6)",
+        });
+      }
+    }
 
-    if (!isSuperAdmin && !user?.Active) {
+    if (!user.isActive) {
       return res.status(403).json({
         success: false,
-        message: "Your account is inactive. Please contact the administrator.",
+        message: "Your account is deactivated. Please contact the administrator.",
       });
     }
 
-    // Pending approval check
-    if (
-      (supervisor && supervisor.username === username && supervisor.isApproved === false) ||
-      (driver && driver.username === username && driver.isApproved === false)
-    ) {
-      return res.status(403).json({ success: false, message: "Your account is not approved yet." });
-    }
-
-    // Validate password
     const isMatch = await comparePassword(password, user.password);
     if (!isMatch) {
-      return res.status(400).json({ success: false, message: "Incorrect password or username ID" });
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      const attemptsRemaining = Math.max(0, 5 - user.failedLoginAttempts);
+
+      if (user.failedLoginAttempts >= 5) {
+        user.isLocked = true;
+        user.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30-minute lockout
+        await user.save();
+
+        await recordAuditLog({
+          req,
+          userId: user._id,
+          username: user.username,
+          userRole: user.role,
+          action: "ACCOUNT_LOCKED",
+          entityType: "User",
+          entityId: user._id,
+          details: { reason: "5 consecutive failed login attempts reached" },
+        });
+
+        return res.status(403).json({
+          success: false,
+          message: "Account locked: 5 consecutive failed login attempts reached. Please reset password or contact Central administrator. (FR-1.6)",
+        });
+      }
+
+      await user.save();
+
+      await recordAuditLog({
+        req,
+        username: user.username,
+        userRole: user.role,
+        action: "LOGIN_FAILED",
+        entityType: "Auth",
+        details: { attemptsRemaining },
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect password. ${attemptsRemaining} attempts remaining before account lockout.`,
+      });
     }
+
+    // Login successful: reset failed attempts
+    user.failedLoginAttempts = 0;
+    user.isLocked = false;
+    user.lockUntil = null;
+    user.lastLoginAt = new Date();
+    await user.save();
 
     const tokenPayload = {
       id: user._id,
+      name: user.name,
       username: user.username,
+      email: user.email,
       role: user.role,
-      schoolId: user?.schoolId,
-      AssignedBranch: Array.isArray(user?.AssignedBranch)
-        ? user.AssignedBranch.map((b) => b._id || b)
-        : [],
-      loginAccess: user.Active ?? true,
+      zone: user.zone,
+      cluster: user.cluster,
+      centres: user.centres,
+      loginAccess: true,
     };
-
-    if (user.role === "branch" && user.schoolId) {
-      tokenPayload.schoolId = user.schoolId._id || user.schoolId;
-    }
-
-    if (["supervisor", "driver", "parent"].includes(user.role) && user.branchId) {
-      tokenPayload.branchId = user.branchId._id || user.branchId;
-    }
 
     const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
     const token = jwt.sign(tokenPayload, secret, { expiresIn: "7d" });
-
     authCache.set(user._id.toString(), tokenPayload);
 
     await recordAuditLog({
@@ -267,6 +143,7 @@ export const loginUser = async (req, res) => {
       userRole: user.role,
       action: "LOGIN_SUCCESS",
       entityType: "Auth",
+      details: { role: user.role, zone: user.zone },
     });
 
     return res.status(200).json({
@@ -275,6 +152,10 @@ export const loginUser = async (req, res) => {
       token,
       role: user.role,
       username: user.username,
+      name: user.name,
+      zone: user.zone,
+      cluster: user.cluster,
+      centres: user.centres,
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -291,7 +172,7 @@ export const resetPassword = async (req, res) => {
     if ((!username && !email) || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: "Username/email and newPassword are required",
+        message: "Username or email and newPassword are required.",
       });
     }
 
@@ -299,9 +180,9 @@ export const resetPassword = async (req, res) => {
       ? { username: username.toLowerCase().trim() }
       : { email: email.toLowerCase().trim() };
 
-    const user = await PrekUser.findOne(query);
+    const user = await User.findOne(query);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User account not found" });
+      return res.status(404).json({ success: false, message: "User account not found." });
     }
 
     user.password = encrypt(newPassword.trim());
@@ -331,9 +212,9 @@ export const resetPassword = async (req, res) => {
 };
 
 /**
- * FR-1.4: Administrator-Driven User Creation (Central Admin Only)
+ * FR-1.4: Central Administrator Account Creation
  */
-export const createPrekUser = async (req, res) => {
+export const createUser = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
     if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
@@ -348,7 +229,7 @@ export const createPrekUser = async (req, res) => {
     if (!name || !username || !email || !password || !role) {
       return res.status(400).json({
         success: false,
-        message: "name, username, email, password, and role are required fields",
+        message: "name, username, email, password, and role are required.",
       });
     }
 
@@ -360,18 +241,18 @@ export const createPrekUser = async (req, res) => {
       });
     }
 
-    const existingUser = await PrekUser.findOne({
+    const existingUser = await User.findOne({
       $or: [{ username: username.toLowerCase().trim() }, { email: email.toLowerCase().trim() }],
     });
 
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: "Username or email is already registered",
+        message: "Username or email is already registered.",
       });
     }
 
-    const newUser = new PrekUser({
+    const newUser = new User({
       name: name.trim(),
       username: username.toLowerCase().trim(),
       email: email.toLowerCase().trim(),
@@ -399,7 +280,7 @@ export const createPrekUser = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: `User ${newUser.username} (${newUser.role}) created successfully.`,
+      message: `User ${newUser.username} (${newUser.role}) provisioned successfully.`,
       data: {
         id: newUser._id,
         name: newUser.name,
@@ -418,9 +299,9 @@ export const createPrekUser = async (req, res) => {
 };
 
 /**
- * FR-1.4: Administrator-Driven User Management - List Users
+ * FR-1.4: List Provisioned Users (Central & National Head)
  */
-export const getPrekUsers = async (req, res) => {
+export const getUsers = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
     if (
@@ -448,7 +329,7 @@ export const getPrekUsers = async (req, res) => {
       ];
     }
 
-    const users = await PrekUser.find(filter)
+    const users = await User.find(filter)
       .select("-password")
       .sort({ createdAt: -1 });
 
@@ -463,9 +344,9 @@ export const getPrekUsers = async (req, res) => {
 };
 
 /**
- * FR-1.4: Administrator-Driven Role / Zone Reassignment & Details Update
+ * FR-1.4: Update User Assignment (Role, Zone, Cluster, Centres)
  */
-export const updatePrekUser = async (req, res) => {
+export const updateUser = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
     if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
@@ -478,9 +359,9 @@ export const updatePrekUser = async (req, res) => {
     const { id } = req.params;
     const { name, role, zone, cluster, centres, isActive } = req.body;
 
-    const user = await PrekUser.findById(id);
+    const user = await User.findById(id);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     if (name) user.name = name.trim();
@@ -528,7 +409,7 @@ export const updatePrekUser = async (req, res) => {
 /**
  * FR-1.6: Administrator Unlock Account
  */
-export const unlockPrekUser = async (req, res) => {
+export const unlockUser = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
     if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
@@ -539,9 +420,9 @@ export const unlockPrekUser = async (req, res) => {
     }
 
     const { id } = req.params;
-    const user = await PrekUser.findById(id);
+    const user = await User.findById(id);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     user.isLocked = false;
@@ -585,13 +466,13 @@ export const adminResetPassword = async (req, res) => {
     if (!newPassword) {
       return res.status(400).json({
         success: false,
-        message: "newPassword is required",
+        message: "newPassword is required.",
       });
     }
 
-    const user = await PrekUser.findById(id);
+    const user = await User.findById(id);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     user.password = encrypt(newPassword.trim());
@@ -617,203 +498,51 @@ export const adminResetPassword = async (req, res) => {
   }
 };
 
-export const storeFcmToken = async (req, res) => {
-  const { fcmToken: newToken } = req.body;
-  const { id, role } = req.user || {};
-
-  if (!id || !role || !newToken) {
-    return res.status(400).json({ message: "Missing id, role or token" });
-  }
-
-  let Model;
-  if (role === "superAdmin") Model = Superadmin;
-  else if (role === "school") Model = School;
-  else if (role === "branch") Model = Branch;
-  else if (role === "branchgroup") Model = BranchGroup;
-  else if (role === "parent") Model = Parents;
-  else Model = PrekUser;
-
+/**
+ * FR-1.4: Activate / Deactivate Account
+ */
+export const toggleUserActivation = async (req, res) => {
   try {
-    const user = await Model.findById(id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    user.fcmToken = Array.isArray(user.fcmToken) ? user.fcmToken : [];
-
-    const validTokens = [];
-    const removedTokens = [];
-
-    await Promise.all(
-      user.fcmToken.map(async (token) => {
-        try {
-          await admin.messaging().send({
-            token,
-            data: { ping: "1" },
-            android: { priority: "high" },
-            apns: {
-              headers: {
-                "apns-priority": "10",
-                "apns-push-type": "background",
-              },
-              payload: { aps: { "content-available": 1 } },
-            },
-          });
-          validTokens.push(token);
-        } catch (err) {
-          const code = err?.errorInfo?.code || err?.code;
-          const message = err?.errorInfo?.message || err?.message;
-
-          if (
-            code === "messaging/registration-token-not-registered" ||
-            message?.includes("not registered")
-          ) {
-            removedTokens.push(token);
-          } else {
-            validTokens.push(token);
-          }
-        }
-      })
-    );
-
-    let newTokenValid = false;
-    try {
-      await admin.messaging().send({
-        token: newToken,
-        data: { ping: "1" },
-        android: { priority: "high" },
-        apns: {
-          headers: {
-            "apns-priority": "10",
-            "apns-push-type": "background",
-          },
-          payload: { aps: { "content-available": 1 } },
-        },
-      });
-      newTokenValid = true;
-    } catch (err) {
-      // Ignored
-    }
-
-    if (newTokenValid && !validTokens.includes(newToken)) {
-      validTokens.push(newToken);
-    }
-
-    user.fcmToken = validTokens;
-    await user.save();
-
-    res.status(200).json({
-      message: newTokenValid
-        ? "Token stored. Invalid tokens removed if any."
-        : "New token is invalid. Existing tokens cleaned.",
-      totalTokensStored: validTokens.length,
-      removedTokens,
-      updated: true,
-      newTokenStored: newTokenValid,
-    });
-  } catch (error) {
-    console.error("Error storing FCM token:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-export const NotificationOnOff = async (req, res) => {
-  try {
-    const { id, role } = req.user || {};
-    let Model;
-
-    if (role === "superAdmin") Model = Superadmin;
-    else if (role === "school") Model = School;
-    else if (role === "branch") Model = Branch;
-    else if (role === "branchgroup") Model = BranchGroup;
-    else if (role === "parent") Model = Parents;
-    else if (role === "supervisor") Model = Supervisor;
-    else if (role === "driver") Model = Driver;
-    else Model = PrekUser;
-
-    const user = await Model.findById(id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    user.Notification = !user.Notification;
-    await user.save();
-
-    res.status(200).json({
-      message: `Notification ${user.Notification ? "enabled" : "disabled"}`,
-      notificationStatus: user.Notification,
-    });
-  } catch (error) {
-    console.error("Error updating notification status:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-const roleModelMap = {
-  school: School,
-  branch: Branch,
-  branchGroup: BranchGroup,
-  parent: Parents,
-  supervisor: Supervisor,
-  driver: Driver,
-  prekUser: PrekUser,
-};
-
-export const toggleAccountActivation = async (req, res) => {
-  const { role } = req.user;
-  const { id } = req.params;
-  const { Active, userRole } = req.body;
-
-  const requesterRole = normalizePrekRole(role);
-  if (requesterRole !== PREK_ROLES.CENTRAL && role !== "superAdmin") {
-    return res.status(403).json({
-      success: false,
-      message: "You are not authorized to perform this action",
-    });
-  }
-
-  if (typeof Active !== "boolean") {
-    return res.status(400).json({
-      success: false,
-      message: "Active must be boolean (true / false)",
-    });
-  }
-
-  try {
-    // Check if PrekUser first
-    const prekUser = await PrekUser.findById(id);
-    if (prekUser) {
-      prekUser.isActive = Active;
-      await prekUser.save();
-      return res.status(200).json({
-        success: true,
-        message: `User account ${Active ? "activated" : "deactivated"} successfully`,
-        data: prekUser,
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can activate or deactivate accounts.",
       });
     }
 
-    const Model = roleModelMap[userRole];
-    if (!Model) {
+    const { id } = req.params;
+    const { active } = req.body;
+
+    if (typeof active !== "boolean") {
       return res.status(400).json({
         success: false,
-        message: "Invalid role provided",
+        message: "active boolean (true/false) is required.",
       });
     }
 
-    const updatedUser = await Model.findByIdAndUpdate(id, { Active }, { new: true });
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        success: false,
-        message: `${userRole} not found`,
-      });
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
     }
+
+    user.isActive = active;
+    await user.save();
+
+    await recordAuditLog({
+      req,
+      action: active ? "USER_ACTIVATED" : "USER_DEACTIVATED",
+      entityType: "User",
+      entityId: user._id,
+      details: { username: user.username, active },
+    });
 
     return res.status(200).json({
       success: true,
-      message: `${userRole} account ${Active ? "activated" : "deactivated"} successfully`,
-      data: updatedUser,
+      message: `Account for ${user.username} ${active ? "activated" : "deactivated"} successfully.`,
+      data: user,
     });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

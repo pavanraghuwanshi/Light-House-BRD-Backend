@@ -40,9 +40,6 @@ export const authenticateUser = async (req, res, next) => {
       zone: decoded.zone || null,
       cluster: decoded.cluster || null,
       centres: decoded.centres || [],
-      schoolId: decoded.schoolId || null,
-      branchId: decoded.branchId || null,
-      AssignedBranch: decoded.AssignedBranch || null,
       loginAccess: decoded.loginAccess ?? true,
     };
 

@@ -44,57 +44,28 @@ export const normalizeRegion = (region) => {
 
 const incidentSchema = new mongoose.Schema(
   {
-    // FR-6.2: Auto-generated unique Case ID
+    // FR-6.2: Auto-generated unique Case ID (e.g. INC-YYYYMMDD-XXXX)
     caseId: {
       type: String,
       unique: true,
       sparse: true,
       trim: true,
     },
-    email: {
-      type: String,
-      trim: true,
-      lowercase: true,
-      default: "incident-reporting@prek-safety.internal",
-    },
-    schoolName: {
-      type: String,
-      trim: true,
-    },
-    centreName: {
-      type: String,
-      trim: true,
-    },
-    state: {
-      type: String,
-      trim: true,
-      index: true,
-    },
-    region: {
-      type: String,
-      trim: true,
-      set: normalizeRegion,
-    },
-    zone: {
-      type: String,
-      trim: true,
-      set: normalizeRegion,
-      index: true,
-    },
-    category: {
-      type: String,
-      enum: ["Incident", "Near Miss", "Hazard & Risk"],
-      default: "Incident",
-      set: normalizeCategory,
-    },
+    // FR-6.1: Capture fields
     incidentType: {
       type: String,
+      required: true,
       trim: true,
       index: true,
     },
     subCategory: {
       type: String,
       trim: true,
+    },
+    category: {
+      type: String,
+      default: "Incident",
+      set: normalizeCategory,
     },
     severity: {
       type: String,
@@ -104,16 +75,59 @@ const incidentSchema = new mongoose.Schema(
         const norm = normalizeSeverity(val);
         return norm === "unknown" ? "Low" : norm;
       },
+      index: true,
+    },
+    zone: {
+      type: String,
+      required: true,
+      trim: true,
+      set: normalizeRegion,
+      index: true, // "North", "South", "East", "West", "Central"
+    },
+    region: {
+      type: String,
+      trim: true,
+      set: normalizeRegion,
+    },
+    state: {
+      type: String,
+      trim: true,
+      index: true, // Indian State (e.g. Maharashtra, Karnataka, Delhi) for National Dashboard
+    },
+    centreName: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    schoolName: {
+      type: String,
+      trim: true,
+    },
+    date: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    reporterName: {
+      type: String,
+      required: true,
+      trim: true,
     },
     reportedBy: {
       type: String,
       trim: true,
     },
-    reporterName: {
+    reporterRole: {
       type: String,
+      required: true,
+      trim: true, // e.g. AOM, BM, RSO, Staff
+    },
+    description: {
+      type: String,
+      required: true,
       trim: true,
     },
-    reporterRole: {
+    briefDescription: {
       type: String,
       trim: true,
     },
@@ -123,17 +137,15 @@ const incidentSchema = new mongoose.Schema(
         trim: true,
       },
     ],
-    briefDescription: {
+    immediateActionTaken: {
       type: String,
       trim: true,
     },
-    immediateActionTaken: String,
-    pendingAction: String,
-    closureDate: Date,
-    date: {
-      type: Date,
-      default: Date.now,
+    pendingAction: {
+      type: String,
+      trim: true,
     },
+    // Status tracking (FR-7.1, FR-7.2)
     status: {
       type: String,
       enum: ["Open", "In Progress", "In-Progress", "Resolved", "Closed", "Close", "unknown"],
@@ -142,13 +154,16 @@ const incidentSchema = new mongoose.Schema(
         const norm = normalizeStatus(val);
         return norm === "unknown" ? "Open" : norm;
       },
+      index: true,
     },
-    escalationStatus: {
-      type: String,
-      enum: ["No", "Yes"],
-      default: "No",
+    closureDate: Date,
+    closedBy: {
+      userId: String,
+      userName: String,
+      userRole: String,
+      closedAt: Date,
     },
-    escalatedTo: String,
+    // Fixed Escalation Matrix fields (FR-5.1, Section 8)
     escalationOwner: {
       type: String,
       trim: true,
@@ -161,23 +176,25 @@ const incidentSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    slaDeadline: {
-      type: Date,
-    },
     slaHours: {
       type: Number,
+    },
+    slaDeadline: {
+      type: Date,
+      index: true,
     },
     slaAction: {
       type: String,
       trim: true,
     },
-    remarks: String,
-    closedBy: {
-      userId: String,
-      userName: String,
-      userRole: String,
-      closedAt: Date,
+    escalationStatus: {
+      type: String,
+      enum: ["No", "Yes"],
+      default: "No",
     },
+    escalatedTo: String,
+    remarks: String,
+    // Auditable case history (Section 3, FR-1.5)
     history: [
       {
         changedBy: String,
@@ -189,22 +206,8 @@ const incidentSchema = new mongoose.Schema(
         remarks: String,
       },
     ],
-
-    // optional references
-    schoolId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "School",
-    },
-    branchId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Branch",
-    },
-    parentId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Parent",
-    },
   },
-  { timestamps: true }
+  { timestamps: true, versionKey: false }
 );
 
 // Pre-save normalization and business rules hook
@@ -214,14 +217,38 @@ incidentSchema.pre("save", function (next) {
     this.caseId = generateCaseId();
   }
 
-  // Sync incidentType and subCategory
+  // Sync field aliases
   if (this.incidentType && !this.subCategory) {
     this.subCategory = this.incidentType;
   } else if (this.subCategory && !this.incidentType) {
     this.incidentType = this.subCategory;
   }
 
-  // FR-5.2: Corporal Punishment and POCSO cannot be downgraded from Critical
+  if (this.description && !this.briefDescription) {
+    this.briefDescription = this.description;
+  } else if (this.briefDescription && !this.description) {
+    this.description = this.briefDescription;
+  }
+
+  if (this.reporterName && !this.reportedBy) {
+    this.reportedBy = this.reporterName;
+  } else if (this.reportedBy && !this.reporterName) {
+    this.reporterName = this.reportedBy;
+  }
+
+  if (this.zone && !this.region) {
+    this.region = this.zone;
+  } else if (this.region && !this.zone) {
+    this.zone = this.region;
+  }
+
+  if (this.centreName && !this.schoolName) {
+    this.schoolName = this.centreName;
+  } else if (this.schoolName && !this.centreName) {
+    this.centreName = this.schoolName;
+  }
+
+  // FR-5.2: Mandatory Critical for Corporal Punishment & POCSO (Non-downgradable)
   if (isNonDowngradable(this.incidentType) || isNonDowngradable(this.subCategory)) {
     this.severity = "Critical";
   } else if (this.severity) {
@@ -235,18 +262,9 @@ incidentSchema.pre("save", function (next) {
     this.status = norm === "unknown" ? "Open" : norm;
   }
 
-  // Normalize category & region
   if (this.category) this.category = normalizeCategory(this.category);
   if (this.region) this.region = normalizeRegion(this.region);
   if (this.zone) this.zone = normalizeRegion(this.zone);
-
-  // Sync aliases
-  if (this.zone && !this.region) this.region = this.zone;
-  if (this.region && !this.zone) this.zone = this.region;
-  if (this.centreName && !this.schoolName) this.schoolName = this.centreName;
-  if (this.schoolName && !this.centreName) this.centreName = this.schoolName;
-  if (this.reporterName && !this.reportedBy) this.reportedBy = this.reporterName;
-  if (this.reportedBy && !this.reporterName) this.reporterName = this.reportedBy;
 
   // Auto-populate escalation rules and SLA from severity (FR-5.1 & FR-6.4)
   const escalation = getEscalationDetails(this.severity);
@@ -262,36 +280,15 @@ incidentSchema.pre("save", function (next) {
   next();
 });
 
-// Compound Indexes based on role-based queries (ESR Rule)
+// Indexes for high-performance dashboard aggregations & case log lookups
 incidentSchema.index({ zone: 1, date: -1 });
 incidentSchema.index({ state: 1, date: -1 });
 incidentSchema.index({ incidentType: 1, date: -1 });
 incidentSchema.index({ severity: 1, date: -1 });
 incidentSchema.index({ status: 1, date: -1 });
-
-// School + Branch + Date / createdAt
-incidentSchema.index({ schoolId: 1, branchId: 1, date: -1 });
-incidentSchema.index({ schoolId: 1, branchId: 1, createdAt: -1 });
-
-// School-wide queries + Date / createdAt
-incidentSchema.index({ schoolId: 1, date: -1 });
-incidentSchema.index({ schoolId: 1, createdAt: -1 });
-
-// Branch-specific & BranchGroup queries ($in: branchIds) + Date / createdAt
-incidentSchema.index({ branchId: 1, date: -1 });
-incidentSchema.index({ branchId: 1, createdAt: -1 });
-
-// Parent-specific queries + Date / createdAt
-incidentSchema.index({ parentId: 1, date: -1 });
-incidentSchema.index({ parentId: 1, createdAt: -1 });
-
-// Global date / createdAt index
 incidentSchema.index({ date: -1 });
 incidentSchema.index({ createdAt: -1 });
-
-// Role + Region + Category + Date / createdAt drill-down queries
-incidentSchema.index({ schoolId: 1, region: 1, category: 1, date: -1 });
-incidentSchema.index({ schoolId: 1, region: 1, category: 1, createdAt: -1 });
+incidentSchema.index({ centreName: 1, date: -1 });
 
 const Incident = dbConnections.db2?.model
   ? dbConnections.db2.model("Incident", incidentSchema)

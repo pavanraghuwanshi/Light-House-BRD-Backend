@@ -164,36 +164,18 @@ export const calculateSlaDeadline = (baseDate, severity) => {
 };
 
 /**
- * FR-7.2: Verify whether user role has permission to resolve/close a case of given severity.
- * Supports both Pre-K 5-tier roles (AOM, BM, RSO, National Head, Central)
- * and legacy entity roles (branch, branchGroup, school, superAdmin).
- * Mapping:
- * - branch       -> AOM tier: can close Low
- * - branchGroup  -> BM tier: can close Low & Medium
- * - school       -> National Head / Zone tier: can close Low, Medium & High
- * - superAdmin   -> Central tier: can close all including Critical
+ * FR-7.2: Verify whether user role has permission to resolve/close a case of given severity
+ * Enforces Section 5 key permissions:
+ * - AOM: resolve & close Low-severity cases
+ * - BM: own & resolve Medium-severity cases (and Low)
+ * - RSO: own High-severity cases (and Medium, Low)
+ * - Central & National Head: own & resolve Critical cases (full visibility)
  */
 export const canRoleCloseIncident = (userRole, severity) => {
   if (!userRole) return false;
-  const raw = String(userRole).trim();
-  const lower = raw.toLowerCase();
-
-  // Check normalized Pre-K role first
-  let resolvedRole = normalizePrekRole(raw);
-
-  // Map legacy entity roles to equivalent operational closure authority
-  if (!resolvedRole || resolvedRole === raw) {
-    if (lower === "branch") resolvedRole = PREK_ROLES.AOM;
-    else if (lower === "branchgroup") resolvedRole = PREK_ROLES.BM;
-    else if (lower === "school") resolvedRole = PREK_ROLES.NATIONAL_HEAD;
-    else if (lower === "superadmin") resolvedRole = PREK_ROLES.CENTRAL;
-  }
-
+  const normalizedRole = normalizePrekRole(userRole) || userRole;
   const escalation = getEscalationDetails(severity);
-  return (
-    escalation.canCloseRoles.includes(resolvedRole) ||
-    escalation.canCloseRoles.includes(raw)
-  );
+  return escalation.canCloseRoles.includes(normalizedRole);
 };
 
 /**

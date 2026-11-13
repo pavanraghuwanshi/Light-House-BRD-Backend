@@ -4,9 +4,8 @@ import Incident, {
   normalizeSeverity,
   normalizeStatus,
 } from "../Models/incident.js";
-import School from "../Models/school.js";
 import AuditLog from "../Models/auditLog.js";
-import { buildQueryWithRole, resolveSchoolAndBranch } from "../Utils/roleResolver.js";
+import { buildQueryWithRole } from "../Utils/roleResolver.js";
 import mongoose from "mongoose";
 import {
   parseDashboardDateRange,
@@ -14,7 +13,6 @@ import {
   buildEffectiveDateFilter,
   getRegionVariants,
   getCategoryVariants,
-  safeObjectId,
   buildFacetPipeline,
   formatDashboardResponse,
   parseMongoExplainStats,
@@ -25,7 +23,6 @@ import {
   INCIDENT_TYPE_DEFAULTS,
   NON_DOWNGRADABLE_CRITICAL_TYPES,
   isNonDowngradable,
-  getDefaultSeverityForType,
   enforceSeverityRules,
   ESCALATION_MATRIX,
   getEscalationDetails,
@@ -40,56 +37,37 @@ import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
  * FR-6.1 - FR-6.4: Incident Reporting Controller
- * Captures: region/zone, date, type, severity, reporter name & role, description.
- * Auto-generates unique Case ID (FR-6.2).
- * Validates reporter name & description (FR-6.3).
- * Auto-routes to escalation owner & SLA, enforces non-downgradable rules (FR-5.2, FR-6.4).
+ * - Captures: zone/region, state, centre, date, type, severity, reporter name & role, description.
+ * - Auto-generates unique Case ID (FR-6.2).
+ * - Validates reporter name & description (FR-6.3).
+ * - Auto-routes to escalation owner & SLA, enforces non-downgradable rules (FR-5.2, FR-6.4).
+ * - Confirms escalation owner & SLA to submitter (FR-6.4).
  */
 export const addIncident = async (req, res) => {
   try {
-    const rawRole = req.user?.role;
-    const prekRole = normalizePrekRole(rawRole);
-    const isPrekRole = !!prekRole;
-
-    const { schoolId, branchId, parentId } = resolveSchoolAndBranch(req);
-
-    // Validate School only if schoolId is provided or legacy school-bound role
-    if (schoolId) {
-      const school = await School.findById(schoolId);
-      if (!school && !isPrekRole) {
-        return res.status(404).json({ success: false, message: "School not found" });
-      }
-    }
-
     const {
-      email,
-      region,
       zone,
+      region,
       state,
       centreName,
-      schoolName,
-      category,
       incidentType,
       subCategory,
       severity: requestedSeverity,
-      reportedBy,
       reporterName,
+      reportedBy,
       reporterRole,
-      stakeholders,
-      briefDescription,
       description,
+      briefDescription,
       immediateActionTaken,
       pendingAction,
-      closureDate,
       date,
-      status,
-      escalationStatus,
-      escalatedTo,
-      remarks,
+      stakeholders,
     } = req.body;
 
-    // FR-6.3: Validate reporter name and description
-    const finalReporterName = String(reporterName || reportedBy || req.user?.name || req.user?.username || "").trim();
+    // FR-6.3: Pre-submission validation
+    const finalReporterName = String(
+      reporterName || reportedBy || req.user?.name || req.user?.username || ""
+    ).trim();
     const finalDescription = String(description || briefDescription || "").trim();
 
     if (!finalReporterName) {
@@ -116,43 +94,34 @@ export const addIncident = async (req, res) => {
 
     const newIncident = new Incident({
       caseId,
-      email: email || req.user?.email || "incident-reporting@prek-safety.internal",
-      region: region || zone || req.user?.zone,
-      zone: zone || region || req.user?.zone,
-      state: state || "",
-      centreName: centreName || schoolName || "",
-      schoolName: schoolName || centreName || "",
-      category: category || "Incident",
       incidentType: finalType,
       subCategory: finalType,
       severity: finalSeverity,
-      reportedBy: finalReporterName,
-      reporterName: finalReporterName,
-      reporterRole: reporterRole || req.user?.role || "Field Staff",
-      stakeholders: stakeholders || [],
-      briefDescription: finalDescription,
-      immediateActionTaken,
-      pendingAction,
-      closureDate,
+      zone: zone || region || req.user?.zone || "North",
+      region: region || zone || req.user?.zone || "North",
+      state: state || "",
+      centreName: centreName || req.user?.centres?.[0] || "",
       date: incidentDate,
-      status: status || "Open",
-      escalationStatus: escalationStatus || "No",
-      escalatedTo: escalatedTo || escalation.owner,
+      reporterName: finalReporterName,
+      reportedBy: finalReporterName,
+      reporterRole: reporterRole || req.user?.role || "Staff",
+      description: finalDescription,
+      briefDescription: finalDescription,
+      immediateActionTaken: immediateActionTaken || "",
+      pendingAction: pendingAction || "",
+      stakeholders: Array.isArray(stakeholders) ? stakeholders : [],
+      status: "Open",
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
       sla: escalation.sla,
       slaHours: escalation.slaHours,
       slaAction: escalation.action,
       slaDeadline,
-      remarks,
-      schoolId,
-      branchId,
-      parentId,
     });
 
     await newIncident.save();
 
-    // FR-1.5: Log audit trail
+    // FR-1.5: Audit Log
     await recordAuditLog({
       req,
       action: "INCIDENT_CREATED",
@@ -170,7 +139,7 @@ export const addIncident = async (req, res) => {
     // FR-6.4: Confirm escalation owner and SLA to submitter
     return res.status(201).json({
       success: true,
-      message: `Incident ${newIncident.caseId} reported successfully. Assigned escalation owner: ${escalation.owner} (${escalation.sla} SLA).`,
+      message: `Incident ${newIncident.caseId} reported successfully. Escalated to ${escalation.owner} with ${escalation.sla} SLA.`,
       caseId: newIncident.caseId,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
@@ -189,11 +158,11 @@ export const addIncident = async (req, res) => {
 };
 
 /**
- * FR-7.1, FR-7.3: Get Incidents with Search, Filter & Role Scoping
+ * FR-7.1, FR-7.3: Case Log with Search, Filter & Role Scoping
  */
 export const getIncidents = async (req, res) => {
   try {
-    let { page = 1, limit = 10, search = "", status = "", region = "", zone = "" } = req.query;
+    let { page = 1, limit = 10, search = "", status = "", zone = "", region = "" } = req.query;
 
     page = Math.max(1, parseInt(page) || 1);
     if (limit === "all" || limit === "All" || limit === 0 || limit === "0") {
@@ -203,7 +172,7 @@ export const getIncidents = async (req, res) => {
     }
     const skip = (page - 1) * limit;
 
-    // Role-based filter
+    // 5-Tier Role Scoping Filter (FR-1.3)
     let filter = buildQueryWithRole(req);
 
     if (status && status.toLowerCase() !== "all") {
@@ -214,118 +183,49 @@ export const getIncidents = async (req, res) => {
       }
     }
 
-    const targetRegion = region || zone;
-    if (targetRegion && targetRegion.toLowerCase() !== "all") {
+    const targetZone = zone || region;
+    if (targetZone && targetZone.toLowerCase() !== "all") {
       filter.$or = filter.$or || [];
       filter.$or.push(
-        { region: { $regex: "^" + targetRegion + "$", $options: "i" } },
-        { zone: { $regex: "^" + targetRegion + "$", $options: "i" } }
+        { zone: { $regex: "^" + targetZone + "$", $options: "i" } },
+        { region: { $regex: "^" + targetZone + "$", $options: "i" } }
       );
     }
 
-    // Convert to ObjectId for legacy references if present
-    if (filter?.branchId) {
-      if (filter.branchId.$in) {
-        filter.branchId.$in = filter.branchId.$in.map(
-          (id) => new mongoose.Types.ObjectId(id)
-        );
-      } else if (mongoose.Types.ObjectId.isValid(filter.branchId)) {
-        filter.branchId = new mongoose.Types.ObjectId(filter.branchId);
-      }
+    // FR-7.1: Multi-field search
+    if (search) {
+      const searchRegex = { $regex: search, $options: "i" };
+      filter.$or = filter.$or || [];
+      filter.$or.push(
+        { caseId: searchRegex },
+        { description: searchRegex },
+        { briefDescription: searchRegex },
+        { incidentType: searchRegex },
+        { reporterName: searchRegex },
+        { reportedBy: searchRegex },
+        { centreName: searchRegex },
+        { state: searchRegex }
+      );
     }
 
-    if (filter?.schoolId && mongoose.Types.ObjectId.isValid(filter.schoolId)) {
-      filter.schoolId = new mongoose.Types.ObjectId(filter.schoolId);
-    }
-    if (filter?.parentId && mongoose.Types.ObjectId.isValid(filter.parentId)) {
-      filter.parentId = new mongoose.Types.ObjectId(filter.parentId);
-    }
-
-    const pipeline = [
-      { $match: filter },
-
-      // School join (optional)
-      {
-        $lookup: {
-          from: "schools",
-          localField: "schoolId",
-          foreignField: "_id",
-          as: "school",
-        },
-      },
-      { $unwind: { path: "$school", preserveNullAndEmptyArrays: true } },
-
-      // Branch join (optional)
-      {
-        $lookup: {
-          from: "branches",
-          localField: "branchId",
-          foreignField: "_id",
-          as: "branch",
-        },
-      },
-      { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
-
-      // FR-7.1: Search by Case ID, description, type, reporter, or centre
-      ...(search
-        ? [
-            {
-              $match: {
-                $or: [
-                  { caseId: { $regex: search, $options: "i" } },
-                  { briefDescription: { $regex: search, $options: "i" } },
-                  { incidentType: { $regex: search, $options: "i" } },
-                  { subCategory: { $regex: search, $options: "i" } },
-                  { reportedBy: { $regex: search, $options: "i" } },
-                  { reporterName: { $regex: search, $options: "i" } },
-                  { centreName: { $regex: search, $options: "i" } },
-                  { state: { $regex: search, $options: "i" } },
-                  { "school.schoolName": { $regex: search, $options: "i" } },
-                  { "branch.branchName": { $regex: search, $options: "i" } },
-                ],
-              },
-            },
-          ]
-        : []),
-
-      // Sort latest first
-      { $sort: { createdAt: -1 } },
-
-      // Pagination + Count
-      {
-        $facet: {
-          data: [
-            { $skip: skip },
-            { $limit: limit },
-            {
-              $addFields: {
-                schoolName: { $ifNull: ["$centreName", "$school.schoolName"] },
-                branchName: "$branch.branchName",
-              },
-            },
-            {
-              $project: {
-                school: 0,
-                branch: 0,
-              },
-            },
-          ],
-          total: [{ $count: "count" }],
-        },
-      },
-    ];
-
-    const result = await Incident.aggregate(pipeline);
+    const [incidents, total] = await Promise.all([
+      Incident.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Incident.countDocuments(filter),
+    ]);
 
     return res.status(200).json({
       success: true,
-      total: result[0]?.total[0]?.count || 0,
+      total,
       page,
       limit,
-      data: result[0]?.data || [],
+      data: incidents,
     });
   } catch (err) {
-    console.error("GET INCIDENT ERROR:", err);
+    console.error("GET INCIDENTS ERROR:", err);
     return res.status(400).json({
       success: false,
       message: err.message,
@@ -334,45 +234,41 @@ export const getIncidents = async (req, res) => {
 };
 
 /**
- * FR-7.2: Update Incident Status with Role-Based Permission Enforcement
- * Ensures:
- * - AOM can only close Low severity incidents
- * - BM can close Low and Medium severity incidents
- * - RSO can close Low, Medium, and High severity incidents
- * - Central and National Head can close all severities (including Critical)
+ * FR-7.2: Role-Enforced Case Closure Authority
+ * - Area Operations Manager (AOM) can ONLY resolve and close Low-severity cases.
+ * - Business Manager (BM) can resolve and close Medium & Low severity cases.
+ * - Regional Safety Officer (RSO) can resolve High, Medium & Low severity cases.
+ * - Central (All-Activity Admin) & National Head can resolve all cases including Critical.
  */
 export const updateIncidentStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, remarks, escalationStatus, escalatedTo, closureDate } = req.body;
+    const { status, remarks, closureDate } = req.body;
 
-    // Validate ID or Case ID
     const query = mongoose.Types.ObjectId.isValid(id)
       ? { _id: new mongoose.Types.ObjectId(id) }
       : { caseId: id };
 
     const incident = await Incident.findOne(query);
-
     if (!incident) {
       return res.status(404).json({
         success: false,
-        message: "Incident not found",
+        message: "Incident not found.",
       });
     }
 
-    // Validate status
     const allowedStatus = ["Open", "In Progress", "In-Progress", "Resolved", "Closed", "Close"];
     if (status && !allowedStatus.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid status value",
+        message: "Invalid status value.",
       });
     }
 
     const nextStatus = status ? normalizeStatus(status) : incident.status;
     const isClosing = nextStatus === "Closed" || nextStatus === "Resolved";
 
-    // FR-7.2: RBAC permission check on status closure
+    // FR-7.2 RBAC Check
     if (isClosing) {
       const userRole = req.user?.role;
       const canClose = canRoleCloseIncident(userRole, incident.severity);
@@ -400,10 +296,8 @@ export const updateIncidentStatus = async (req, res) => {
     const prevStatus = incident.status;
     if (status) incident.status = nextStatus;
     if (remarks) incident.remarks = remarks;
-    if (escalationStatus) incident.escalationStatus = escalationStatus;
-    if (escalatedTo) incident.escalatedTo = escalatedTo;
 
-    // Maintain case audit history
+    // Record in history (auditable trail)
     incident.history = incident.history || [];
     incident.history.push({
       changedBy: req.user?.username || req.user?.name || "unknown",
@@ -417,7 +311,7 @@ export const updateIncidentStatus = async (req, res) => {
 
     await incident.save();
 
-    // FR-1.5: Log audit trail
+    // FR-1.5: Audit Log
     await recordAuditLog({
       req,
       action: isClosing ? "INCIDENT_CLOSED" : "INCIDENT_STATUS_CHANGED",
@@ -434,20 +328,20 @@ export const updateIncidentStatus = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Incident ${incident.caseId || incident._id} status updated to ${incident.status} successfully`,
+      message: `Incident ${incident.caseId || incident._id} status updated to ${incident.status} successfully.`,
       data: incident,
     });
   } catch (error) {
     console.error("Error updating incident status:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error while updating incident status",
+      message: "Server error while updating incident status.",
     });
   }
 };
 
 /**
- * Update incident details (enforces non-downgradable rules)
+ * Update incident details (FR-5.2: enforces non-downgradable rule)
  */
 export const updateIncident = async (req, res) => {
   try {
@@ -458,20 +352,17 @@ export const updateIncident = async (req, res) => {
       : { caseId: id };
 
     let filter = buildQueryWithRole(req, query);
-
-    delete req.body.schoolId;
-    delete req.body.branchId;
-    delete req.body.caseId; // Prevent changing unique Case ID
+    delete req.body.caseId; // Prevent modifying unique Case ID
 
     const existingIncident = await Incident.findOne(filter);
     if (!existingIncident) {
       return res.status(404).json({
         success: false,
-        message: "Incident not found or not authorized",
+        message: "Incident not found or not authorized.",
       });
     }
 
-    // FR-5.2: Enforce non-downgradable rule
+    // FR-5.2: Non-downgradable rule
     const targetType = req.body.incidentType || req.body.subCategory || existingIncident.incidentType;
     if (isNonDowngradable(targetType) && req.body.severity && req.body.severity !== "Critical") {
       req.body.severity = "Critical"; // Block downgrade
@@ -506,7 +397,7 @@ export const updateIncident = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Incident updated successfully",
+      message: "Incident updated successfully.",
       data: updatedIncident,
     });
   } catch (err) {
@@ -518,28 +409,33 @@ export const updateIncident = async (req, res) => {
 };
 
 /**
- * Delete Incident
+ * Delete Incident (Central Only)
  */
 export const deleteIncident = async (req, res) => {
   try {
-    const { id } = req.params;
+    const rawRole = req.user?.role;
+    const prekRole = normalizePrekRole(rawRole);
+    if (prekRole !== PREK_ROLES.CENTRAL && rawRole !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can delete incidents.",
+      });
+    }
 
+    const { id } = req.params;
     const query = mongoose.Types.ObjectId.isValid(id)
       ? { _id: id }
       : { caseId: id };
 
-    let filter = buildQueryWithRole(req, query);
-
-    const deletedIncident = await Incident.findOneAndDelete(filter);
-
+    const deletedIncident = await Incident.findOneAndDelete(query);
     if (!deletedIncident) {
       return res.status(404).json({
         success: false,
-        message: "Incident not found or not authorized",
+        message: "Incident not found.",
       });
     }
 
-    // Audit Log
+    // FR-1.5: Audit Log
     await recordAuditLog({
       req,
       action: "INCIDENT_DELETED",
@@ -550,7 +446,7 @@ export const deleteIncident = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Incident ${deletedIncident.caseId || id} deleted successfully`,
+      message: `Incident ${deletedIncident.caseId || id} deleted successfully.`,
     });
   } catch (err) {
     return res.status(400).json({
@@ -570,15 +466,11 @@ export const deleteIncident = async (req, res) => {
  */
 export const getNationalDashboard = async (req, res) => {
   try {
-    const rawRole = req.user?.role;
-    const prekRole = normalizePrekRole(rawRole);
-
-    // Filter scoped by role (Central & National Head see all; RSO sees zone)
     let filter = {};
     try {
       filter = buildQueryWithRole(req);
     } catch (err) {
-      // Allow National Head / Central default
+      // Default to open filter for National Head / Central
     }
 
     delete filter.status;
@@ -624,7 +516,6 @@ export const getNationalDashboard = async (req, res) => {
       },
     ]);
 
-    // Build map of counts per state
     const stateCountMap = new Map();
     let totalIncidents = 0;
     let totalOpen = 0;
@@ -715,17 +606,16 @@ export const getNationalDashboard = async (req, res) => {
         (s) => s.state.toLowerCase() === String(requestedState).trim().toLowerCase()
       );
       if (matched) {
-        // Query recent incidents in this state
         const stateIncidents = await Incident.find({
           state: { $regex: `^${matched.state}$`, $options: "i" },
         })
           .sort({ date: -1, createdAt: -1 })
           .limit(10)
-          .select("caseId incidentType severity status date reportedBy briefDescription escalationOwner");
+          .select("caseId incidentType severity status date reporterName description escalationOwner");
 
         selectedStateDetails = {
           ...matched,
-          zoneDashboardUrl: `/api/incident-stats?region=${encodeURIComponent(matched.zone)}`,
+          zoneDashboardUrl: `/api/incident-stats?zone=${encodeURIComponent(matched.zone)}`,
           recentIncidents: stateIncidents,
         };
       }
@@ -901,58 +791,10 @@ export const getIncidentDashboard = async (req, res) => {
     }
     delete filter.month;
 
-    if (filter?.branchId) {
-      if (filter.branchId.$in) {
-        const converted = [];
-        for (const id of filter.branchId.$in) {
-          const casted = safeObjectId(id);
-          if (!casted) {
-            return res.status(400).json({
-              success: false,
-              message: `Invalid branchId format: ${id}`,
-            });
-          }
-          converted.push(casted);
-        }
-        filter.branchId.$in = converted;
-      } else {
-        const casted = safeObjectId(filter.branchId);
-        if (!casted) {
-          return res.status(400).json({
-            success: false,
-            message: `Invalid branchId format: ${filter.branchId}`,
-          });
-        }
-        filter.branchId = casted;
-      }
-    }
-
-    if (filter?.schoolId) {
-      const casted = safeObjectId(filter.schoolId);
-      if (!casted) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid schoolId format: ${filter.schoolId}`,
-        });
-      }
-      filter.schoolId = casted;
-    }
-
-    if (filter?.parentId) {
-      const casted = safeObjectId(filter.parentId);
-      if (!casted) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid parentId format: ${filter.parentId}`,
-        });
-      }
-      filter.parentId = casted;
-    }
-
     const pipeline = buildFacetPipeline(filter);
 
     const isAuthorizedForExplain =
-      req.user?.role === "superAdmin" || process.env.NODE_ENV !== "production";
+      req.user?.role === "Central" || req.user?.role === "superAdmin" || process.env.NODE_ENV !== "production";
     const shouldExplain =
       isAuthorizedForExplain &&
       (req.query.explain === "true" || req.query.benchmark === "true");

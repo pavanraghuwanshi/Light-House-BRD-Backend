@@ -156,61 +156,50 @@ describe("3. Region and Category Filtering (Index-Friendly Variants)", () => {
   });
 });
 
-describe("4. Role-Based Access Control Filtering", () => {
-  const schoolObjectId = new mongoose.Types.ObjectId().toString();
-  const branchObjectId = new mongoose.Types.ObjectId().toString();
-  const parentObjectId = new mongoose.Types.ObjectId().toString();
-
-  it("applies no role restrictions for superAdmin", () => {
-    const req = { user: { role: "superAdmin" }, query: {} };
+describe("4. Role-Based Access Control Filtering (5-Tier BRD Hierarchy)", () => {
+  it("applies no role restrictions for Central (All-Activity Admin) & superAdmin", () => {
+    const req = { user: { role: "Central" }, query: {} };
     const filter = buildQueryWithRole(req);
-    assert.equal(filter.schoolId, undefined);
-    assert.equal(filter.branchId, undefined);
+    assert.deepEqual(filter, {});
+
+    const reqAdmin = { user: { role: "superAdmin" }, query: {} };
+    assert.deepEqual(buildQueryWithRole(reqAdmin), {});
   });
 
-  it("applies schoolId filter for school role", () => {
-    const req = { user: { role: "school", id: schoolObjectId }, query: {} };
+  it("applies no role restrictions for National Head", () => {
+    const req = { user: { role: "National Head" }, query: {} };
     const filter = buildQueryWithRole(req);
-    assert.equal(filter.schoolId, schoolObjectId);
+    assert.deepEqual(filter, {});
   });
 
-  it("applies branchId $in filter for branchGroup role", () => {
+  it("applies zone scoping filter for Regional Safety Officer (RSO)", () => {
+    const req = { user: { role: "RSO", zone: "North" }, query: {} };
+    const filter = buildQueryWithRole(req);
+    assert.ok(filter.$or);
+    assert.equal(filter.$or[0].zone.$regex, "^North$");
+  });
+
+  it("applies cluster and centre filters for Business Manager (BM)", () => {
     const req = {
-      user: { role: "branchGroup", AssignedBranch: [branchObjectId] },
+      user: { role: "BM", zone: "West", cluster: "West-Cluster-1", centres: ["Centre Pune"] },
       query: {},
     };
     const filter = buildQueryWithRole(req);
-    assert.deepEqual(filter.branchId, { $in: [branchObjectId] });
+    assert.ok(filter.$or);
+    assert.ok(filter.$or.some((c) => c.cluster === "West-Cluster-1"));
   });
 
-  it("applies schoolId and branchId filters for branch role", () => {
+  it("applies centre scoping filter for Area Operations Manager (AOM)", () => {
     const req = {
-      user: { role: "branch", schoolId: schoolObjectId, id: branchObjectId },
+      user: { role: "AOM", centres: ["Centre Delhi 1", "Centre Delhi 2"] },
       query: {},
     };
     const filter = buildQueryWithRole(req);
-    assert.equal(filter.schoolId, schoolObjectId);
-    assert.equal(filter.branchId, branchObjectId);
-  });
-
-  it("applies schoolId, branchId, and parentId filters for parent role", () => {
-    const req = {
-      user: {
-        role: "parent",
-        schoolId: schoolObjectId,
-        branchId: branchObjectId,
-        id: parentObjectId,
-      },
-      query: {},
-    };
-    const filter = buildQueryWithRole(req);
-    assert.equal(filter.schoolId, schoolObjectId);
-    assert.equal(filter.branchId, branchObjectId);
-    assert.equal(filter.parentId, parentObjectId);
+    assert.deepEqual(filter.centreName, { $in: ["Centre Delhi 1", "Centre Delhi 2"] });
   });
 
   it("throws unauthorized error for invalid or unknown role", () => {
-    const req = { user: { role: "supervisor" }, query: {} };
+    const req = { user: { role: "unknownRole" }, query: {} };
     assert.throws(() => buildQueryWithRole(req), /not authorized/);
   });
 });

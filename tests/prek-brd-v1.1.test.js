@@ -18,7 +18,7 @@ import {
   PREK_STATE_BASELINE,
   TOTAL_NETWORK_CENTRES,
 } from "../Utils/prekConstants.js";
-import { buildQueryWithRole, resolveSchoolAndBranch } from "../Utils/roleResolver.js";
+import { buildQueryWithRole } from "../Utils/roleResolver.js";
 import { encrypt, decrypt, comparePassword } from "../Utils/crypto.js";
 
 describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporting Portal", () => {
@@ -89,18 +89,7 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
         query: {},
       };
       const filter = buildQueryWithRole(req);
-      assert.ok(filter.$or, "AOM query should scope to assigned centres");
-      assert.deepEqual(filter.$or[0].centreName.$in, ["Kothrud Centre", "Baner Centre"]);
-    });
-
-    it("resolveSchoolAndBranch handles Pre-K roles without requiring legacy school database document", () => {
-      const req = {
-        user: { role: "AOM", zone: "North" },
-        body: { centreName: "Pre-K Delhi Centre" },
-      };
-      const resolved = resolveSchoolAndBranch(req);
-      assert.equal(resolved.schoolId, null);
-      assert.equal(resolved.branchId, null);
+      assert.deepEqual(filter.centreName, { $in: ["Kothrud Centre", "Baner Centre"] });
     });
   });
 
@@ -228,25 +217,6 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(canRoleCloseIncident("Central", "Critical"), true);
 
       assert.equal(canRoleCloseIncident("superAdmin", "Critical"), true);
-    });
-
-    it("maintains backward compatibility with legacy entity roles (branch, branchGroup, school)", () => {
-      // branch maps to AOM tier: can close Low, but not Medium, High, or Critical
-      assert.equal(canRoleCloseIncident("branch", "Low"), true);
-      assert.equal(canRoleCloseIncident("branch", "Medium"), false);
-      assert.equal(canRoleCloseIncident("branch", "Critical"), false);
-
-      // branchGroup maps to BM tier: can close Low & Medium, but not High or Critical
-      assert.equal(canRoleCloseIncident("branchGroup", "Low"), true);
-      assert.equal(canRoleCloseIncident("branchGroup", "Medium"), true);
-      assert.equal(canRoleCloseIncident("branchGroup", "High"), false);
-      assert.equal(canRoleCloseIncident("branchGroup", "Critical"), false);
-
-      // school maps to executive / national oversight: can close up to High, but not Critical
-      assert.equal(canRoleCloseIncident("school", "Low"), true);
-      assert.equal(canRoleCloseIncident("school", "Medium"), true);
-      assert.equal(canRoleCloseIncident("school", "High"), true);
-      assert.equal(canRoleCloseIncident("school", "Critical"), false);
     });
   });
 

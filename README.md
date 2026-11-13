@@ -2,15 +2,15 @@
 
 > **BRD Reference:** `Pre-K_Incident_Portal_BRD_v1.1.pdf`  
 > **Git Branch:** `feature/pre-k-incident-portal-brd-v1.1`  
-> **Status:** Production-Ready Implementation & Verified against BRD v1.1
+> **Architecture:** Pure BRD v1.1 Implementation (5-Tier Role Hierarchy, Centralized Incident Management & Analytics)
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-The **Pre-K Division National Incident & Safety Reporting Portal** is a centralized backend system designed for logging, classifying, escalating, and monitoring child-safety and operational incidents across approximately **2,000 pre-K centres** in India.
+The **Pre-K Division National Incident & Safety Reporting Portal** is a centralised backend system strictly designed according to **BRD v1.1** for logging, classifying, escalating, and monitoring child-safety and operational incidents across approximately **2,000 pre-K centres** in India.
 
-This release addresses the requirements outlined in **BRD v1.1**, including:
+This system replaces legacy ad-hoc prototype structures and implements:
 1. **5-Tier Role-Based Access Control (RBAC)** across ~94 named launch accounts (`AOM`, `BM`, `RSO`, `National Head`, `Central`).
 2. **Standardized Incident Capture & Auto-routing** with unique Case IDs (`INC-YYYYMMDD-XXXX`).
 3. **Strict Escalation Matrix & SLA Timelines** (Critical escalated within 2 hours; non-downgradable rule for POCSO and Corporal Punishment).
@@ -63,27 +63,31 @@ This release addresses the requirements outlined in **BRD v1.1**, including:
 ## 4. Key BRD Functional Implementations
 
 ### FR-1.1 to FR-1.6: Authentication & User Administration
-- **Unique Accounts:** Individual email/username and encrypted credentials for all provisioned users.
+- **Unique Accounts (FR-1.1):** Individual email/username and encrypted credentials for all provisioned users.
 - **Account Lockout Policy (FR-1.6):** Accounts lock automatically after **5 consecutive failed login attempts**. Return HTTP 403 with lockout duration or admin reset requirement.
 - **Audit Logging (FR-1.5):** Asynchronously records all logins (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `ACCOUNT_LOCKED`), case lifecycle actions (`INCIDENT_CREATED`, `INCIDENT_STATUS_CHANGED`, `INCIDENT_CLOSED`), and user provisioning.
 - **Self-Service & Admin Management (FR-1.4):**
-  - `/auth/reset-password`: Self-service reset endpoint.
-  - `/api/prek-users`: Central admin endpoints to create, list, reassign zones/centres, and unlock user accounts.
+  - `POST /auth/reset-password`: Self-service reset endpoint.
+  - `POST /api/users`: Central admin creates user.
+  - `GET /api/users`: List users with role/zone filters.
+  - `PUT /api/users/:id`: Reassign roles, zones, clusters, or centres.
+  - `PUT /api/users/:id/unlock`: Unlock locked accounts.
+  - `PUT /api/users/:id/status`: Activate / deactivate accounts.
 
 ### FR-3.1 to FR-3.5: National Dashboard & Rate Band Analytics
-- **Total Centre Baseline (FR-3.1):** Configured against the 23-state pre-K network baseline (~2,260 centres across North, South, East, West, and Central zones).
+- **Total Centre Baseline (FR-3.1):** Aggregates across the 23-state pre-K network baseline (~2,260 centres across North, South, East, West, and Central zones).
 - **Incident Rate per 100 Centres (FR-3.1):** `(totalIncidents / totalCentres) * 100`.
 - **State Tile Map & Rate Bands (FR-3.2):**
   - `Low`: Rate < 2.0 per 100 centres
   - `Medium`: 2.0 <= Rate < 5.0
   - `High`: 5.0 <= Rate < 10.0
   - `Critical`: Rate >= 10.0
-- **State Selection Drill-down (FR-3.3):** Querying `?state=Maharashtra` returns state-level centre volume, incident count, rate band, recent incidents, and a direct link to the state's zone dashboard (`/api/incident-stats?region=West`).
+- **State Selection Drill-down (FR-3.3):** Querying `?state=Maharashtra` returns state-level centre volume, incident count, rate band, recent incidents, and a direct link to the state's zone dashboard (`/api/incident-stats?zone=West`).
 - **Zone Comparison (FR-3.4):** Grouped volume and incident rate across North, South, East, West, and Central zones.
 - **States to Watch (FR-3.5):** Top 5 ranked states sorted descending by incident rate.
 
 ### FR-6.1 to FR-6.4: Incident Reporting
-- **Field Capture (FR-6.1):** Region/zone, incident date, type, severity, reporter name and role, description, immediate/pending action.
+- **Field Capture (FR-6.1):** Zone/region, state, centre, incident date, type, severity, reporter name and role, description, immediate/pending action.
 - **Auto-generated Case ID (FR-6.2):** Standardized format `INC-YYYYMMDD-XXXX` (e.g. `INC-20261112-4821`).
 - **Validation (FR-6.3):** Pre-submission validation ensuring reporter name and description cannot be blank.
 - **Escalation Confirmation (FR-6.4):** The API response confirms the assigned escalation owner and exact SLA deadline immediately on creation.
@@ -94,7 +98,7 @@ This release addresses the requirements outlined in **BRD v1.1**, including:
   - Frontline `AOM` attempting to close Medium, High, or Critical cases receives `403 Forbidden`.
   - `BM` can close Low and Medium cases, but is blocked from High or Critical.
   - `RSO` can close Low, Medium, and High cases, but is blocked from Critical.
-  - `Central` (and `superAdmin`) holds sole authority to close Critical incidents.
+  - `Central` (and `National Head`) holds sole authority to close Critical incidents.
 - **Escalation Reference Display (FR-7.3):** Every case log entry includes `caseId`, `escalationOwner`, `sla`, `slaDeadline`, `status`, and `history`.
 
 ---
@@ -107,11 +111,12 @@ This release addresses the requirements outlined in **BRD v1.1**, including:
 |---|---|---|---|
 | `POST` | `/auth/login` | Public | Authenticates user credentials. Returns JWT with role, zone, cluster, and centres. Enforces 5-attempt lockout. |
 | `POST` | `/auth/reset-password` | Public | Self-service password reset using username/email and new password. |
-| `POST` | `/api/prek-users` | `Central`, `superAdmin` | Provision a new Pre-K user account (`AOM`, `BM`, `RSO`, `National Head`, `Central`). |
-| `GET` | `/api/prek-users` | `Central`, `National Head` | List all provisioned Pre-K users with role and zone filters. |
-| `PUT` | `/api/prek-users/:id` | `Central`, `superAdmin` | Update user assignments (role, zone, cluster, centres, active status). |
-| `PUT` | `/api/prek-users/:id/unlock` | `Central`, `superAdmin` | Unlock an account locked by failed attempts. |
-| `PUT` | `/api/prek-users/:id/reset-password`| `Central`, `superAdmin` | Administrator reset of a user's password. |
+| `POST` | `/api/users` | `Central` | Provision a new Pre-K user account (`AOM`, `BM`, `RSO`, `National Head`, `Central`). |
+| `GET` | `/api/users` | `Central`, `National Head` | List all provisioned Pre-K users with role and zone filters. |
+| `PUT` | `/api/users/:id` | `Central` | Update user assignments (role, zone, cluster, centres, active status). |
+| `PUT` | `/api/users/:id/unlock` | `Central` | Unlock an account locked by failed attempts. |
+| `PUT` | `/api/users/:id/reset-password` | `Central` | Administrator reset of a user's password. |
+| `PUT` | `/api/users/:id/status` | `Central` | Activate / deactivate user account. |
 
 ### 5.2 Incident Reporting & Management
 
@@ -121,7 +126,7 @@ This release addresses the requirements outlined in **BRD v1.1**, including:
 | `GET` | `/api/get-incidents` | Authenticated | Scoped case log with search (`search=`), status (`status=Open`), and pagination (`page=1&limit=10`). |
 | `PUT` | `/api/update-incident/:id` | Authenticated | Update incident details (blocks downgrade of POCSO & Corporal Punishment). |
 | `PUT` | `/api/update-incident-status/:id` | Authenticated | Toggle status (`Open`/`Closed`). Enforces RBAC matrix (FR-7.2). |
-| `DELETE` | `/api/delete-incident/:id` | `Central`, `superAdmin` | Delete incident record. |
+| `DELETE` | `/api/delete-incident/:id` | `Central` | Delete incident record. |
 
 ### 5.3 Dashboards & Reference Data
 
@@ -130,40 +135,37 @@ This release addresses the requirements outlined in **BRD v1.1**, including:
 | `GET` | `/api/national-dashboard` | Authenticated | **National Dashboard (FR-3.1 - FR-3.5):** National metrics, 23-state tile map with rate bands, zone comparison, states to watch, and state drill-down (`?state=...`). |
 | `GET` | `/api/incident-stats` | Authenticated | **Zone Overview Dashboard (FR-4.1 - FR-4.6):** KPI cards, severity trends, severity-mix, region comparison, and Type × Region matrix. |
 | `GET` | `/api/escalation-matrix` | Public / All | **Standing Reference (FR-5.3):** Viewable escalation rules, SLAs, required actions, and default type severities. |
-| `GET` | `/api/audit-logs` | `Central`, `superAdmin` | Paginated audit trail of all security and case lifecycle events (FR-1.5). |
+| `GET` | `/api/audit-logs` | `Central` | Paginated audit trail of all security and case lifecycle events (FR-1.5). |
 
 ---
 
-## 6. Project Architecture
+## 6. Clean Codebase Architecture
 
 ```
 Prototype-Light-House-Backend/
 ├── Controllers/
-│   ├── Incident.Controller.js    # Incident lifecycle, National & Zone dashboards, Audit logs
-│   ├── User.Controller.js        # Authentication, 5-attempt lockout, Pre-K user administration
-│   └── ...
+│   ├── Incident.Controller.js    # Incident capture, Case log, National & Zone dashboards, Audit logs
+│   └── User.Controller.js        # Auth, 5-attempt lockout, Pre-K user administration
 ├── Middleware/
-│   └── authMiddleware.js         # JWT verification, Pre-K role injection & caching
+│   └── authMiddleware.js         # JWT verification, Pre-K role injection & in-memory caching
 ├── Models/
-│   ├── incident.js               # Case ID, SLA deadline, non-downgradable hooks, ESR indexes
-│   ├── prekUser.js               # 5-tier Pre-K user model, lockout flags & zone mappings
-│   ├── auditLog.js               # Security and operational audit trail schema
-│   └── ...
+│   ├── incident.js               # Case ID, SLA deadline, non-downgradable hooks, aggregation indexes
+│   ├── user.js                   # 5-tier Pre-K user model (AOM, BM, RSO, National Head, Central)
+│   └── auditLog.js               # Security and operational audit trail schema
 ├── Routes/
-│   ├── incident.route.js         # Incident and Dashboard routes
-│   ├── prekUser.route.js         # Pre-K user admin routes (/api/prek-users)
-│   ├── userlogin.route.js        # Auth routes (/auth/login, /auth/reset-password)
-│   └── ...
+│   ├── auth.route.js             # Authentication routes (/auth/login, /auth/reset-password)
+│   ├── user.route.js             # User management routes (/api/users)
+│   └── incident.route.js         # Incident and Dashboard routes
 ├── Utils/
 │   ├── prekConstants.js          # Escalation matrix, 10 types, rate bands, 23-state baseline
 │   ├── auditLogger.js            # Non-blocking resilient audit logger
-│   ├── roleResolver.js           # 5-tier query scoping & branch resolver
+│   ├── roleResolver.js           # 5-tier query scoping by zone/cluster/centres
 │   ├── dashboardHelpers.js       # $facet pipelines, date parsing, explain plan parser
 │   └── crypto.js                 # AES-256-CBC encryption/decryption with default key fallbacks
 ├── tests/
-│   ├── incident-dashboard.test.js # Core dashboard & normalization unit tests (28 tests)
-│   └── prek-brd-v1.1.test.js     # BRD v1.1 compliance test suite (25 tests)
-├── server.js                     # Express app setup, route mounting & socket init
+│   ├── incident-dashboard.test.js # Core dashboard & normalization unit tests
+│   └── prek-brd-v1.1.test.js     # BRD v1.1 compliance test suite
+├── server.js                     # Express app setup, clean route mounting & socket init
 └── package.json                  # Dependencies & test scripts
 ```
 
@@ -202,30 +204,9 @@ npm start
 
 ## 8. Automated Testing & Verification
 
-The test suite validates both legacy dashboard contracts and all BRD v1.1 business requirements.
-
 Run all tests:
 ```powershell
 npm test
 ```
 
-### Test Coverage Summary:
-- **`tests/incident-dashboard.test.js` (28 tests):**
-  - Normalization of Status (`Open`, `In Progress`, `Closed`, `Resolved`) & Severity.
-  - Date Range & Month Parsing (UTC midnight boundaries, ISO 8601, `$lt` next-day upper bound).
-  - Index-Friendly Region & Category Variants.
-  - Role-Based Query Filtering.
-  - Single-pass `$facet` Dashboard aggregation & Explain plan metrics parser.
-- **`tests/prek-brd-v1.1.test.js` (25 tests):**
-  - 5-Tier Pre-K Role Hierarchy & Alias Normalization (`AOM`, `BM`, `RSO`, `National Head`, `Central`).
-  - Scoped Query Filtering (Central: national; National Head: national; RSO: zone; BM: cluster/centres; AOM: local area).
-  - Fixed Escalation Matrix (Low: 72h; Medium: 48h; High: 24h; Critical: 2h).
-  - Non-downgradable enforcement for `POCSO` and `Corporal Punishment` (FR-5.2).
-  - RBAC Case Closure Authority (FR-7.2: AOM blocked from closing Critical; Central authorized).
-  - Unique Case ID Generation (`INC-YYYYMMDD-XXXX`).
-  - National Dashboard rate calculations per 100 centres & colour-coded rate bands (`Low`, `Medium`, `High`, `Critical`).
-  - 23-State pre-K network baseline (~2,260 centres) & "States to Watch" ranking.
-  - AES-256-CBC Cryptographic utilities.
-
-**Total Tests:** **53 passing** across 15 suites (0 failures).
-
+**Total Tests:** **52 passing** across 15 suites (0 failures).

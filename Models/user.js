@@ -2,7 +2,16 @@ import mongoose from "mongoose";
 import { dbConnections } from "../Database/db.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
 
-const prekUserSchema = new mongoose.Schema(
+/**
+ * Pre-K Portal User Schema (BRD v1.1 Section 5 & Section 6.1)
+ * Enforces role-based access control for 5 roles:
+ * - Area Operations Manager (AOM) (~60 users)
+ * - Business Manager (BM) (~25 users)
+ * - Regional Safety Officer (RSO) (~4 users)
+ * - National Head (~3 users)
+ * - Central (All-Activity Admin) (~2 users)
+ */
+const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
@@ -50,6 +59,7 @@ const prekUserSchema = new mongoose.Schema(
     cluster: {
       type: String,
       trim: true, // Business Manager cluster
+      index: true,
     },
     centres: [
       {
@@ -61,6 +71,7 @@ const prekUserSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // FR-1.6: Account Lockout Fields
     failedLoginAttempts: {
       type: Number,
       default: 0,
@@ -76,12 +87,6 @@ const prekUserSchema = new mongoose.Schema(
     lastLoginAt: {
       type: Date,
     },
-    resetPasswordToken: {
-      type: String,
-    },
-    resetPasswordExpires: {
-      type: Date,
-    },
   },
   {
     timestamps: true,
@@ -89,12 +94,11 @@ const prekUserSchema = new mongoose.Schema(
   }
 );
 
-prekUserSchema.index({ role: 1, zone: 1 });
-prekUserSchema.index({ role: 1, cluster: 1 });
+userSchema.index({ role: 1, zone: 1 });
+userSchema.index({ role: 1, cluster: 1 });
 
-const PrekUser = dbConnections.db2?.model
-  ? dbConnections.db2.model("PrekUser", prekUserSchema)
-  : mongoose.model("PrekUser", prekUserSchema);
+const User = dbConnections.db2?.model
+  ? dbConnections.db2.model("User", userSchema)
+  : mongoose.model("User", userSchema);
 
-export default PrekUser;
-
+export default User;
