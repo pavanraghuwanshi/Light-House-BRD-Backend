@@ -30,3 +30,4 @@ router.put("/users/:id/reset-password", authenticateUser, adminResetPassword);
 router.put("/users/:id/status", authenticateUser, toggleUserActivation);
 
 export default router;
+

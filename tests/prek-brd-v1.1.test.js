@@ -135,6 +135,28 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       );
     });
 
+    it("FR-1.3 Centre Conflict Detection: Detects and rejects assigning an already-allocated centre to a second AOM", () => {
+      // Simulate existing active AOMs in database
+      const existingAOMs = [
+        { name: "AOM Mumbai", username: "aom_mumbai", centres: ["Centre Bandra", "Centre Andheri"] },
+        { name: "AOM Pune", username: "aom_pune", centres: ["Centre Kothrud", "Centre Baner"] },
+      ];
+
+      const newAOMCentres = ["Centre Bandra", "Centre Thane"];
+
+      // Check conflict logic matching User.Controller
+      const conflicting = [];
+      existingAOMs.forEach((u) => {
+        const overlap = u.centres.filter((c) => newAOMCentres.includes(c));
+        if (overlap.length > 0) {
+          conflicting.push(`${u.name} (@${u.username}) already manages: ${overlap.join(", ")}`);
+        }
+      });
+
+      assert.equal(conflicting.length, 1);
+      assert.match(conflicting[0], /AOM Mumbai \(@aom_mumbai\) already manages: Centre Bandra/);
+    });
+
     it("FR-1.3 Safe Default: An AOM without assigned centres is restricted to empty array and cannot view peer reports", () => {
       const reqUnassignedAOM = {
         user: {

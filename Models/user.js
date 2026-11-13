@@ -102,3 +102,4 @@ const User = dbConnections.db2?.model
   : mongoose.model("User", userSchema);
 
 export default User;
+

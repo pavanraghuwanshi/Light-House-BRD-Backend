@@ -252,6 +252,31 @@ export const createUser = async (req, res) => {
       });
     }
 
+    const assignedCentres = Array.isArray(centres) ? centres : centres ? [centres] : [];
+
+    // BRD Section 5 & FR-1.3: 1-AOM-per-centre allocation rule
+    // Prevent assigning the same centre to multiple AOMs to guarantee strict peer isolation
+    if (normalizedRole === PREK_ROLES.AOM && assignedCentres.length > 0) {
+      const conflictingUsers = await User.find({
+        role: PREK_ROLES.AOM,
+        isActive: true,
+        centres: { $in: assignedCentres },
+      }).select("name username centres");
+
+      if (conflictingUsers.length > 0) {
+        const conflicts = [];
+        conflictingUsers.forEach((u) => {
+          const overlap = u.centres.filter((c) => assignedCentres.includes(c));
+          conflicts.push(`${u.name} (@${u.username}) already manages: ${overlap.join(", ")}`);
+        });
+        return res.status(400).json({
+          success: false,
+          message: `Centre allocation conflict: A single centre cannot have multiple AOMs. Conflicting assignments: ${conflicts.join("; ")}`,
+          conflicts,
+        });
+      }
+    }
+
     const newUser = new User({
       name: name.trim(),
       username: username.toLowerCase().trim(),
@@ -260,7 +285,7 @@ export const createUser = async (req, res) => {
       role: normalizedRole,
       zone: zone ? zone.trim() : undefined,
       cluster: cluster ? cluster.trim() : undefined,
-      centres: Array.isArray(centres) ? centres : centres ? [centres] : [],
+      centres: assignedCentres,
       isActive: true,
     });
 
@@ -364,11 +389,38 @@ export const updateUser = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
+    const targetRole = role ? (normalizePrekRole(role) || role) : user.role;
+    const targetCentres = centres !== undefined ? (Array.isArray(centres) ? centres : [centres]) : user.centres;
+
+    // BRD Section 5 & FR-1.3: 1-AOM-per-centre allocation rule
+    // Prevent assigning the same centre to multiple AOMs to guarantee strict peer isolation
+    if (targetRole === PREK_ROLES.AOM && Array.isArray(targetCentres) && targetCentres.length > 0) {
+      const conflictingUsers = await User.find({
+        role: PREK_ROLES.AOM,
+        _id: { $ne: user._id },
+        isActive: true,
+        centres: { $in: targetCentres },
+      }).select("name username centres");
+
+      if (conflictingUsers.length > 0) {
+        const conflicts = [];
+        conflictingUsers.forEach((u) => {
+          const overlap = u.centres.filter((c) => targetCentres.includes(c));
+          conflicts.push(`${u.name} (@${u.username}) already manages: ${overlap.join(", ")}`);
+        });
+        return res.status(400).json({
+          success: false,
+          message: `Centre allocation conflict: A single centre cannot have multiple AOMs. Conflicting assignments: ${conflicts.join("; ")}`,
+          conflicts,
+        });
+      }
+    }
+
     if (name) user.name = name.trim();
-    if (role) user.role = normalizePrekRole(role) || role;
+    if (role) user.role = targetRole;
     if (zone !== undefined) user.zone = zone ? zone.trim() : "";
     if (cluster !== undefined) user.cluster = cluster ? cluster.trim() : "";
-    if (centres !== undefined) user.centres = Array.isArray(centres) ? centres : [centres];
+    if (centres !== undefined) user.centres = targetCentres;
     if (typeof isActive === "boolean") user.isActive = isActive;
 
     await user.save();
