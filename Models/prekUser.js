@@ -97,3 +97,4 @@ const PrekUser = dbConnections.db2?.model
   : mongoose.model("PrekUser", prekUserSchema);
 
 export default PrekUser;
+

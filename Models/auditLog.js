@@ -66,3 +66,4 @@ const AuditLog = dbConnections.db2?.model
   : mongoose.model("AuditLog", auditLogSchema);
 
 export default AuditLog;
+

@@ -229,6 +229,25 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
 
       assert.equal(canRoleCloseIncident("superAdmin", "Critical"), true);
     });
+
+    it("maintains backward compatibility with legacy entity roles (branch, branchGroup, school)", () => {
+      // branch maps to AOM tier: can close Low, but not Medium, High, or Critical
+      assert.equal(canRoleCloseIncident("branch", "Low"), true);
+      assert.equal(canRoleCloseIncident("branch", "Medium"), false);
+      assert.equal(canRoleCloseIncident("branch", "Critical"), false);
+
+      // branchGroup maps to BM tier: can close Low & Medium, but not High or Critical
+      assert.equal(canRoleCloseIncident("branchGroup", "Low"), true);
+      assert.equal(canRoleCloseIncident("branchGroup", "Medium"), true);
+      assert.equal(canRoleCloseIncident("branchGroup", "High"), false);
+      assert.equal(canRoleCloseIncident("branchGroup", "Critical"), false);
+
+      // school maps to executive / national oversight: can close up to High, but not Critical
+      assert.equal(canRoleCloseIncident("school", "Low"), true);
+      assert.equal(canRoleCloseIncident("school", "Medium"), true);
+      assert.equal(canRoleCloseIncident("school", "High"), true);
+      assert.equal(canRoleCloseIncident("school", "Critical"), false);
+    });
   });
 
   describe("5. Unique Case ID Generation (FR-6.2)", () => {
@@ -307,3 +326,4 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
     });
   });
 });
+

@@ -228,3 +228,4 @@ npm test
   - AES-256-CBC Cryptographic utilities.
 
 **Total Tests:** **53 passing** across 15 suites (0 failures).
+
