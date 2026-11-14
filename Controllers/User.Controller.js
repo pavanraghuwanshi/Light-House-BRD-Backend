@@ -1,6 +1,6 @@
 import User from "../Models/user.js";
 import jwt from "jsonwebtoken";
-import { comparePassword, encrypt } from "../Utils/crypto.js";
+import { comparePassword, encrypt, decrypt } from "../Utils/crypto.js";
 import authCache from "../Utils/authCache.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
 import recordAuditLog from "../Utils/auditLogger.js";
@@ -355,13 +355,19 @@ export const getUsers = async (req, res) => {
     }
 
     const users = await User.find(filter)
-      .select("-password")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Include plain-text decrypted password for administrative user review
+    const usersWithPlainPassword = users.map((u) => ({
+      ...u,
+      password: u.password ? decrypt(u.password) : "",
+    }));
 
     return res.status(200).json({
       success: true,
-      total: users.length,
-      data: users,
+      total: usersWithPlainPassword.length,
+      data: usersWithPlainPassword,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
