@@ -290,8 +290,6 @@ incidentSchema.index({ date: -1 });
 incidentSchema.index({ createdAt: -1 });
 incidentSchema.index({ centreName: 1, date: -1 });
 
-const Incident = dbConnections.db2?.model
-  ? dbConnections.db2.model("Incident", incidentSchema)
-  : mongoose.model("Incident", incidentSchema);
+const Incident = mongoose.models.Incident || mongoose.model("Incident", incidentSchema);
 
 export default Incident;

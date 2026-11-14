@@ -244,17 +244,37 @@ Prototype-Light-House-Backend/
 ### 8.2 Configuration (.env)
 Create a `.env` file in the root directory:
 ```env
-PORT=3000
-JWT_SECRET=your_secure_jwt_secret_key_2026
-ENCRYPTION_KEY=your_32_character_encryption_key_
-IV=your_16_character_iv_value_
-MONGO_URI_1=mongodb://localhost:27017/prek_db1
-MONGO_URI_2=mongodb://localhost:27017/prek_db2
-NODE_ENV=development
+PORT=9000
+MONGO_URI=mongodb://localhost:27017/prek_incident_db
+JWT_SECRET=your_jwt_secret_key_change_in_production
+REFRESH_TOKEN_SECRET=your_refresh_token_secret_key
+IV=your_16_byte_iv_key_here
+ENCRYPTION_KEY=your_32_byte_encryption_key_here
 ```
-*(Note: Cryptographic helpers and auth middleware include safe fallback keys for offline unit testing without environment variables).*
 
-### 8.3 Start Server
+### 8.3 Database Seeding (Pre-K Dummy Test Data)
+Populate test accounts for every single role and sample incidents across severities:
+```powershell
+node scripts/seed-dummy-data.js
+```
+
+#### Pre-Provisioned Test Accounts (Password: `Password@123`)
+
+| Role | Username | Assigned Scope | Key Test Purpose |
+|---|---|---|---|
+| **Central Admin** | `central_admin` | National | Full visibility; owns Critical POCSO & Corporal Punishment; user management |
+| **National Head** | `national_head` | National | Strategic oversight; National & Zone dashboards |
+| **RSO (West)** | `rso_west` | West Zone | Oversees Mumbai & Pune clusters; owns High severity cases |
+| **RSO (North)** | `rso_north` | North Zone | Oversees Delhi cluster; owns High severity cases |
+| **BM (Mumbai)** | `bm_mumbai` | Mumbai Cluster | Supervises `aom_bandra` & `aom_andheri`; owns Medium cases |
+| **BM (Pune)** | `bm_pune` | Pune Cluster | Supervises `aom_pune`; owns Medium cases |
+| **BM (Delhi)** | `bm_delhi` | Delhi Cluster | Supervises `aom_delhi`; owns Medium cases |
+| **AOM 1 (Bandra)** | `aom_bandra` | Bandra & Juhu Centres | Isolated from AOM Andheri; resolves Low cases only |
+| **AOM 2 (Andheri)** | `aom_andheri` | Andheri & Colaba Centres | Isolated from AOM Bandra; resolves Low cases only |
+| **AOM 3 (Pune)** | `aom_pune` | Kothrud & Baner Centres | Resolves Low cases in Pune centres |
+| **AOM 4 (Delhi)** | `aom_delhi` | Rohini & Saket Centres | Resolves Low cases in Delhi centres |
+
+### 8.4 Start Server
 ```powershell
 # Development mode with hot-reload
 npm run dev
