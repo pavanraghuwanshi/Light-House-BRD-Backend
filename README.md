@@ -264,8 +264,7 @@ node scripts/seed-dummy-data.js
 
 | Role | Username | Assigned Scope | Key Test Purpose |
 |---|---|---|---|
-| **Software Admin** | `software_admin` | National | 100% Full Software Control; user provisioning, all zones & cases, Critical incident resolution |
-| **Central Admin** | `central_admin` | National | Full visibility; owns Critical POCSO & Corporal Punishment; user management |
+| **Central Admin (Software Admin)** | `central_admin` | National | 100% Full Software Control; user provisioning, all zones & cases, Critical incident resolution |
 | **National Head** | `national_head` | National | Strategic oversight; National & Zone dashboards |
 | **RSO (West)** | `rso_west` | West Zone | Oversees Mumbai & Pune clusters; owns High severity cases |
 | **RSO (North)** | `rso_north` | North Zone | Oversees Delhi cluster; owns High severity cases |
