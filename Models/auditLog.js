@@ -61,9 +61,7 @@ auditLogSchema.index({ entityType: 1, entityId: 1 });
 auditLogSchema.index({ userRole: 1, action: 1 });
 auditLogSchema.index({ timestamp: -1 });
 
-const AuditLog = dbConnections.db2?.model
-  ? dbConnections.db2.model("AuditLog", auditLogSchema)
-  : mongoose.model("AuditLog", auditLogSchema);
+const AuditLog = mongoose.models.AuditLog || mongoose.model("AuditLog", auditLogSchema);
 
 export default AuditLog;
 

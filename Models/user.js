@@ -97,9 +97,7 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ role: 1, zone: 1 });
 userSchema.index({ role: 1, cluster: 1 });
 
-const User = dbConnections.db2?.model
-  ? dbConnections.db2.model("User", userSchema)
-  : mongoose.model("User", userSchema);
+const User = mongoose.models.User || mongoose.model("User", userSchema);
 
 export default User;
 
