@@ -133,7 +133,23 @@ export const loginUser = async (req, res) => {
     };
 
     const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
-    const token = jwt.sign(tokenPayload, secret, { expiresIn: "7d" });
+    const refreshSecret = process.env.REFRESH_TOKEN_SECRET || (secret + "_refresh_secret_2026");
+
+    // 15-Minute Access Token
+    const accessToken = jwt.sign(tokenPayload, secret, { expiresIn: "15m" });
+
+    // 30-Day Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user._id, username: user.username, role: user.role, type: "refresh" },
+      refreshSecret,
+      { expiresIn: "30d" }
+    );
+
+    // Persist refresh token in database
+    user.refreshToken = refreshToken;
+    user.refreshTokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await user.save();
+
     authCache.set(user._id.toString(), tokenPayload);
 
     await recordAuditLog({
@@ -146,10 +162,22 @@ export const loginUser = async (req, res) => {
       details: { role: user.role, zone: user.zone },
     });
 
+    // Set secure httpOnly cookie
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
     return res.status(200).json({
       success: true,
       message: "Successful Login",
-      token,
+      accessToken,
+      token: accessToken, // backward-compatible alias
+      refreshToken,
+      expiresIn: "15m",
+      refreshExpiresIn: "30d",
       role: user.role,
       username: user.username,
       name: user.name,
@@ -205,6 +233,130 @@ export const resetPassword = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Password reset successfully. You can now log in with your new password.",
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * Refresh Access Token Controller
+ * - Validates refresh token (valid for 30 days)
+ * - Returns a new 15-minute access token
+ * - After 30 days, refresh token expires and user must re-authenticate
+ */
+export const refreshTokenHandler = async (req, res) => {
+  try {
+    const rawRefreshToken =
+      req.body.refreshToken ||
+      req.cookies?.refreshToken ||
+      req.headers["x-refresh-token"];
+
+    if (!rawRefreshToken) {
+      return res.status(401).json({
+        success: false,
+        message: "Refresh token is required.",
+      });
+    }
+
+    const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
+    const refreshSecret = process.env.REFRESH_TOKEN_SECRET || (secret + "_refresh_secret_2026");
+
+    let decoded;
+    try {
+      decoded = jwt.verify(rawRefreshToken, refreshSecret);
+    } catch (err) {
+      if (err.name === "TokenExpiredError") {
+        return res.status(401).json({
+          success: false,
+          message: "Refresh token has expired (30 days limit). Please log in again.",
+          code: "REFRESH_TOKEN_EXPIRED",
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        message: "Invalid refresh token. Please log in again.",
+      });
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user || !user.isActive || user.isLocked) {
+      return res.status(403).json({
+        success: false,
+        message: "User account is inactive, locked, or not found.",
+      });
+    }
+
+    if (user.refreshToken !== rawRefreshToken) {
+      return res.status(403).json({
+        success: false,
+        message: "Refresh token has been revoked or replaced. Please log in again.",
+      });
+    }
+
+    const tokenPayload = {
+      id: user._id,
+      name: user.name,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      zone: user.zone,
+      cluster: user.cluster,
+      centres: user.centres,
+      loginAccess: true,
+    };
+
+    // Issue new 15-minute access token
+    const newAccessToken = jwt.sign(tokenPayload, secret, { expiresIn: "15m" });
+    authCache.set(user._id.toString(), tokenPayload);
+
+    return res.status(200).json({
+      success: true,
+      message: "Access token refreshed successfully.",
+      accessToken: newAccessToken,
+      token: newAccessToken,
+      expiresIn: "15m",
+      refreshToken: user.refreshToken,
+    });
+  } catch (error) {
+    console.error("Refresh token error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while refreshing token.",
+    });
+  }
+};
+
+/**
+ * User Logout Controller
+ * - Revokes stored refresh token in DB and clears cookie
+ */
+export const logoutUser = async (req, res) => {
+  try {
+    const rawRefreshToken =
+      req.body.refreshToken ||
+      req.cookies?.refreshToken ||
+      req.headers["x-refresh-token"];
+
+    if (rawRefreshToken) {
+      const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
+      const refreshSecret = process.env.REFRESH_TOKEN_SECRET || (secret + "_refresh_secret_2026");
+      try {
+        const decoded = jwt.verify(rawRefreshToken, refreshSecret);
+        await User.findByIdAndUpdate(decoded.id, {
+          refreshToken: null,
+          refreshTokenExpiresAt: null,
+        });
+        authCache.del(decoded.id);
+      } catch (e) {
+        // Continue clearing cookie even if token decode fails
+      }
+    }
+
+    res.clearCookie("refreshToken");
+    return res.status(200).json({
+      success: true,
+      message: "Logged out successfully.",
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

@@ -26,7 +26,17 @@ export const normalizePrekRole = (role) => {
   if (r === "bm" || r === "business manager") return PREK_ROLES.BM;
   if (r === "rso" || r === "regional safety officer") return PREK_ROLES.RSO;
   if (r === "national head" || r === "nationalhead" || r === "national_head") return PREK_ROLES.NATIONAL_HEAD;
-  if (r === "central" || r === "central (all-activity admin)" || r === "central admin" || r === "all-activity admin") {
+  if (
+    r === "central" ||
+    r === "central (all-activity admin)" ||
+    r === "central admin" ||
+    r === "all-activity admin" ||
+    r === "admin" ||
+    r === "superadmin" ||
+    r === "super admin" ||
+    r === "software admin" ||
+    r === "software_admin"
+  ) {
     return PREK_ROLES.CENTRAL;
   }
   return role.trim();

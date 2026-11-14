@@ -6,10 +6,16 @@ import {
   unlockUser,
   adminResetPassword,
   toggleUserActivation,
+  refreshTokenHandler,
+  logoutUser,
 } from '../Controllers/User.Controller.js';
 import authenticateUser from '../Middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// Refresh token & logout endpoints available on /api
+router.post("/refresh-token", refreshTokenHandler);
+router.post("/logout", logoutUser);
 
 // FR-1.4: User Provisioning (Central Admin Only)
 router.post("/users", authenticateUser, createUser);
