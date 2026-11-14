@@ -172,10 +172,12 @@ To permanently protect same-level data privacy:
 
 | Method | Endpoint | Access / Role | Description |
 |---|---|---|---|
-| `POST` | `/auth/login` | Public | Authenticates user credentials. Returns JWT with role, zone, cluster, and centres. Enforces 5-attempt lockout. |
+| `POST` | `/auth/login` | Public | Authenticates user credentials. Returns **15-minute Access Token** and **30-day Refresh Token**. Enforces 5-attempt lockout. |
+| `POST` | `/auth/refresh-token` | Public | Refreshes session. Takes a valid 30-day refresh token and returns a new 15-minute access token. |
+| `POST` | `/auth/logout` | Authenticated / Public | Logs out user and revokes stored 30-day refresh token. |
 | `POST` | `/auth/reset-password` | Public | Self-service password reset using username/email and new password. |
 | `POST` | `/api/users` | `Central` | Provision a new Pre-K user account. Validates 1-AOM-per-centre allocation. |
-| `GET` | `/api/users` | `Central`, `National Head` | List all provisioned Pre-K users with role and zone filters. |
+| `GET` | `/api/users` | `Central`, `National Head` | List all provisioned Pre-K users with decrypted plain-text passwords for administrator review. |
 | `PUT` | `/api/users/:id` | `Central` | Update user assignments (role, zone, cluster, centres). Checks centre conflict. |
 | `PUT` | `/api/users/:id/unlock` | `Central` | Unlock an account locked by failed attempts. |
 | `PUT` | `/api/users/:id/reset-password` | `Central` | Administrator reset of a user's password. |
@@ -262,6 +264,7 @@ node scripts/seed-dummy-data.js
 
 | Role | Username | Assigned Scope | Key Test Purpose |
 |---|---|---|---|
+| **Software Admin** | `software_admin` | National | 100% Full Software Control; user provisioning, all zones & cases, Critical incident resolution |
 | **Central Admin** | `central_admin` | National | Full visibility; owns Critical POCSO & Corporal Punishment; user management |
 | **National Head** | `national_head` | National | Strategic oversight; National & Zone dashboards |
 | **RSO (West)** | `rso_west` | West Zone | Oversees Mumbai & Pune clusters; owns High severity cases |
@@ -292,7 +295,7 @@ Run all tests:
 npm test
 ```
 
-**Total Tests:** **56 passing** across 15 suites (0 failures).
+**Total Tests:** **59 passing** across 16 suites (0 failures).
 - 5-Tier role normalization and query scoping.
 - Horizontal peer isolation (AOM 1 vs AOM 2) and upward hierarchy visibility.
 - 1-AOM-per-centre allocation conflict detection.
@@ -302,3 +305,4 @@ npm test
 - Unique Case ID generation (`INC-YYYYMMDD-XXXX`).
 - National Dashboard rate band calculations and Top 5 "States to Watch".
 - 5-attempt account lockout policy and security audit trail.
+- 15-minute Access Token & 30-day Refresh Token lifecycles and expiration validation.
