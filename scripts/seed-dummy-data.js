@@ -14,7 +14,6 @@ dotenv.config();
 
 const mongoUri =
   process.env.MONGO_URI ||
-  process.env.MONGO_URI_2 ||
   "mongodb://127.0.0.1:27017/lighthouse_db";
 
 const DEFAULT_PASSWORD = "Password@123";
@@ -446,3 +445,4 @@ async function seed() {
 }
 
 seed();
+

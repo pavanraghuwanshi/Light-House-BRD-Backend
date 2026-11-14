@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const mongoUri = process.env.MONGO_URI || process.env.MONGO_URI_2 || 'mongodb://127.0.0.1:27017/lighthouse_db';
+const mongoUri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/lighthouse_db';
 
 let isConnected = false;
 
