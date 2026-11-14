@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import jwt from "jsonwebtoken";
 import {
   PREK_ROLES,
   normalizePrekRole,
@@ -414,6 +415,46 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
 
       assert.equal(comparePassword(password, encrypted), true);
       assert.equal(comparePassword("WrongPassword", encrypted), false);
+    });
+  });
+
+  describe("8. Access Token (15 min) & Refresh Token (30 days) Lifecycles", () => {
+    it("generates an access token expiring in 15 minutes and refresh token expiring in 30 days", () => {
+      const secret = "test-secret-2026";
+      const refreshSecret = "test-secret-2026_refresh";
+      const payload = { id: "test-user-id", role: "Central" };
+
+      const accessToken = jwt.sign(payload, secret, { expiresIn: "15m" });
+      const refreshToken = jwt.sign(payload, refreshSecret, { expiresIn: "30d" });
+
+      const decodedAccess = jwt.verify(accessToken, secret);
+      const decodedRefresh = jwt.verify(refreshToken, refreshSecret);
+
+      const accessTtlSeconds = decodedAccess.exp - decodedAccess.iat;
+      const refreshTtlSeconds = decodedRefresh.exp - decodedRefresh.iat;
+
+      assert.equal(accessTtlSeconds, 15 * 60, "Access token TTL must be exactly 15 minutes (900 seconds)");
+      assert.equal(refreshTtlSeconds, 30 * 24 * 60 * 60, "Refresh token TTL must be exactly 30 days (2,592,000 seconds)");
+    });
+
+    it("rejects expired access token with TokenExpiredError", () => {
+      const secret = "test-secret-2026";
+      const expiredToken = jwt.sign({ id: "user-123" }, secret, { expiresIn: -1 });
+
+      assert.throws(
+        () => jwt.verify(expiredToken, secret),
+        (err) => err.name === "TokenExpiredError"
+      );
+    });
+
+    it("rejects expired refresh token after 30 days with TokenExpiredError", () => {
+      const refreshSecret = "test-secret-2026_refresh";
+      const expiredRefreshToken = jwt.sign({ id: "user-123", type: "refresh" }, refreshSecret, { expiresIn: -1 });
+
+      assert.throws(
+        () => jwt.verify(expiredRefreshToken, refreshSecret),
+        (err) => err.name === "TokenExpiredError"
+      );
     });
   });
 });

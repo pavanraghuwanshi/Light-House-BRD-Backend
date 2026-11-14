@@ -19,7 +19,17 @@ const mongoUri =
 const DEFAULT_PASSWORD = "Password@123";
 
 const dummyUsers = [
-  // 1. Central (All-Activity Admin) - National Scope
+  // 1. Software Super Admin & Central (All-Activity Admin) - Full Software Control (National Scope)
+  {
+    name: "Software Super Admin",
+    username: "software_admin",
+    email: "software.admin@lighthouse.com",
+    role: PREK_ROLES.CENTRAL,
+    zone: undefined,
+    cluster: undefined,
+    centres: [],
+    isActive: true,
+  },
   {
     name: "Central Safety Admin",
     username: "central_admin",
