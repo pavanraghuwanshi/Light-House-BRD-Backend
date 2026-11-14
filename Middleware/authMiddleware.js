@@ -49,6 +49,13 @@ export const authenticateUser = async (req, res, next) => {
     req.user = userContext;
     next();
   } catch (error) {
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "Access token expired. Please refresh your session using /auth/refresh-token.",
+        code: "TOKEN_EXPIRED",
+      });
+    }
     console.error("Auth error:", error.message);
     return res.status(401).json({ success: false, message: "Invalid or expired token" });
   }
