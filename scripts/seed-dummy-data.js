@@ -19,17 +19,7 @@ const mongoUri =
 const DEFAULT_PASSWORD = "Password@123";
 
 const dummyUsers = [
-  // 1. Software Super Admin & Central (All-Activity Admin) - Full Software Control (National Scope)
-  {
-    name: "Software Super Admin",
-    username: "software_admin",
-    email: "software.admin@lighthouse.com",
-    role: PREK_ROLES.CENTRAL,
-    zone: undefined,
-    cluster: undefined,
-    centres: [],
-    isActive: true,
-  },
+  // 1. Central (All-Activity Admin / Software Admin) - Full Software Control & National Scope
   {
     name: "Central Safety Admin",
     username: "central_admin",
@@ -382,6 +372,8 @@ async function seed() {
 
     // 1. Seed Users
     console.log("\n--- Seeding Pre-K Users Across Every Role ---");
+    // Ensure no redundant software_admin exists (Central Admin is the software admin)
+    await User.deleteOne({ username: "software_admin" });
     for (const u of dummyUsers) {
       const existing = await User.findOne({ username: u.username });
       const passwordHash = encrypt(DEFAULT_PASSWORD);
