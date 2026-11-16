@@ -683,7 +683,7 @@ export const getEscalationMatrixReference = async (req, res) => {
 };
 
 /**
- * FR-1.5: Audit Logs retrieval for Central administrators
+ * FR-1.5: Audit Logs retrieval with multi-field search and filtering for Central administrators
  */
 export const getAuditLogs = async (req, res) => {
   try {
@@ -697,14 +697,84 @@ export const getAuditLogs = async (req, res) => {
       });
     }
 
-    let { page = 1, limit = 20, action, entityType } = req.query;
+    let {
+      page = 1,
+      limit = 20,
+      search = "",
+      q = "",
+      action,
+      entityType,
+      username,
+      userRole,
+      startDate,
+      endDate,
+    } = req.query;
+
     page = Math.max(1, parseInt(page) || 1);
     limit = Math.max(1, parseInt(limit) || 20);
     const skip = (page - 1) * limit;
 
-    const query = {};
-    if (action) query.action = action;
-    if (entityType) query.entityType = entityType;
+    const andConditions = [];
+
+    if (action && action.trim()) {
+      andConditions.push({ action: { $regex: `^${action.trim()}$`, $options: "i" } });
+    }
+
+    if (entityType && entityType.trim()) {
+      andConditions.push({ entityType: { $regex: `^${entityType.trim()}$`, $options: "i" } });
+    }
+
+    if (username && username.trim()) {
+      andConditions.push({ username: { $regex: `^${username.trim()}$`, $options: "i" } });
+    }
+
+    if (userRole && userRole.trim()) {
+      const normalizedRole = normalizePrekRole(userRole.trim()) || userRole.trim();
+      andConditions.push({ userRole: normalizedRole });
+    }
+
+    if (startDate || endDate) {
+      const dateFilter = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        if (!isNaN(start.getTime())) dateFilter.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        if (!isNaN(end.getTime())) {
+          if (typeof endDate === "string" && endDate.trim().length === 10) {
+            end.setUTCHours(23, 59, 59, 999);
+          }
+          dateFilter.$lte = end;
+        }
+      }
+      if (Object.keys(dateFilter).length > 0) {
+        andConditions.push({ timestamp: dateFilter });
+      }
+    }
+
+    const searchTerm = (search || q || "").trim();
+    if (searchTerm) {
+      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = { $regex: escaped, $options: "i" };
+      andConditions.push({
+        $or: [
+          { action: searchRegex },
+          { username: searchRegex },
+          { userRole: searchRegex },
+          { entityType: searchRegex },
+          { entityId: searchRegex },
+          { ipAddress: searchRegex },
+          { "details.caseId": searchRegex },
+          { "details.updatedUsername": searchRegex },
+          { "details.targetUsername": searchRegex },
+          { "details.remarks": searchRegex },
+          { "details.reason": searchRegex },
+        ],
+      });
+    }
+
+    const query = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [logs, total] = await Promise.all([
       AuditLog.find(query)
@@ -720,6 +790,7 @@ export const getAuditLogs = async (req, res) => {
       total,
       page,
       limit,
+      totalPages: Math.ceil(total / limit),
       data: logs,
     });
   } catch (err) {

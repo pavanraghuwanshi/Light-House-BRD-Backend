@@ -294,7 +294,7 @@ Run all tests:
 npm test
 ```
 
-**Total Tests:** **60 passing** across 16 suites (0 failures).
+**Total Tests:** **62 passing** across 17 suites (0 failures).
 - 5-Tier role normalization and query scoping.
 - Horizontal peer isolation (AOM 1 vs AOM 2) and upward hierarchy visibility.
 - 1-AOM-per-centre allocation conflict detection.

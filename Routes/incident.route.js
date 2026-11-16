@@ -32,6 +32,7 @@ router.get("/escalation-matrix", getEscalationMatrixReference);
 
 // Audit Trail Logs for Central Admin (FR-1.5)
 router.get("/audit-logs", authenticateUser, getAuditLogs);
+router.get("/auditlogs", authenticateUser, getAuditLogs);
 
 // Incident Update
 router.put("/update-incident/:id", authenticateUser, updateIncident);

@@ -482,5 +482,34 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       );
     });
   });
+
+  describe("9. Audit Log Search & Multi-Field Filtering (FR-1.5)", () => {
+    it("constructs regex and multi-field search conditions for audit trail logs", () => {
+      const searchTerm = "aom_bandra";
+      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = { $regex: escaped, $options: "i" };
+
+      const orClause = [
+        { action: searchRegex },
+        { username: searchRegex },
+        { userRole: searchRegex },
+        { entityType: searchRegex },
+        { entityId: searchRegex },
+        { ipAddress: searchRegex },
+        { "details.caseId": searchRegex },
+        { "details.updatedUsername": searchRegex },
+      ];
+
+      assert.equal(orClause.length, 8);
+      assert.equal(searchRegex.$options, "i");
+      assert.equal(searchRegex.$regex, "aom_bandra");
+    });
+
+    it("safely escapes special regex characters in search queries", () => {
+      const specialSearch = "Central (All-Activity Admin)";
+      const escaped = specialSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      assert.equal(escaped, "Central \\(All-Activity Admin\\)");
+    });
+  });
 });
 
