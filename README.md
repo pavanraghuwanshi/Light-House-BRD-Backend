@@ -178,7 +178,7 @@ To permanently protect same-level data privacy:
 | `POST` | `/auth/reset-password` | Public | Self-service password reset using username/email and new password. |
 | `POST` | `/api/users` | `Central` | Provision a new Pre-K user account. Validates 1-AOM-per-centre allocation. |
 | `GET` | `/api/users` | `Central`, `National Head` | List all provisioned Pre-K users with decrypted plain-text passwords for administrator review. |
-| `PUT` | `/api/users/:id` | `Central` | Update user assignments (role, zone, cluster, centres). Checks centre conflict. |
+| `PUT` | `/api/users/:id` | `Central` | Update user details (name, email, password, role, zone, cluster, centres, status). Checks centre conflict. |
 | `PUT` | `/api/users/:id/unlock` | `Central` | Unlock an account locked by failed attempts. |
 | `PUT` | `/api/users/:id/reset-password` | `Central` | Administrator reset of a user's password. |
 | `PUT` | `/api/users/:id/status` | `Central` | Activate / deactivate user account. |
@@ -294,7 +294,7 @@ Run all tests:
 npm test
 ```
 
-**Total Tests:** **59 passing** across 16 suites (0 failures).
+**Total Tests:** **60 passing** across 16 suites (0 failures).
 - 5-Tier role normalization and query scoping.
 - Horizontal peer isolation (AOM 1 vs AOM 2) and upward hierarchy visibility.
 - 1-AOM-per-centre allocation conflict detection.

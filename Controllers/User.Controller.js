@@ -527,7 +527,7 @@ export const getUsers = async (req, res) => {
 };
 
 /**
- * FR-1.4: Update User Assignment (Role, Zone, Cluster, Centres)
+ * FR-1.4: Update User Details & Assignment (Name, Email, Password, Role, Zone, Cluster, Centres, Status)
  */
 export const updateUser = async (req, res) => {
   try {
@@ -540,7 +540,7 @@ export const updateUser = async (req, res) => {
     }
 
     const { id } = req.params;
-    const { name, role, zone, cluster, centres, isActive } = req.body;
+    const { name, email, password, newPassword, role, zone, cluster, centres, isActive } = req.body;
 
     const user = await User.findById(id);
     if (!user) {
@@ -575,11 +575,30 @@ export const updateUser = async (req, res) => {
     }
 
     if (name) user.name = name.trim();
+    if (email && typeof email === "string" && email.trim()) {
+      const emailLower = email.toLowerCase().trim();
+      const existingEmailUser = await User.findOne({ email: emailLower, _id: { $ne: user._id } });
+      if (existingEmailUser) {
+        return res.status(400).json({ success: false, message: "Email is already registered by another user." });
+      }
+      user.email = emailLower;
+    }
     if (role) user.role = targetRole;
     if (zone !== undefined) user.zone = zone ? zone.trim() : "";
     if (cluster !== undefined) user.cluster = cluster ? cluster.trim() : "";
     if (centres !== undefined) user.centres = targetCentres;
     if (typeof isActive === "boolean") user.isActive = isActive;
+
+    // Password update handling (accepts password or newPassword)
+    const updatedPassword = password || newPassword;
+    let passwordUpdated = false;
+    if (updatedPassword && typeof updatedPassword === "string" && updatedPassword.trim()) {
+      user.password = encrypt(updatedPassword.trim());
+      user.isLocked = false;
+      user.failedLoginAttempts = 0;
+      user.lockUntil = null;
+      passwordUpdated = true;
+    }
 
     await user.save();
 
@@ -593,12 +612,13 @@ export const updateUser = async (req, res) => {
         role: user.role,
         zone: user.zone,
         isActive: user.isActive,
+        passwordUpdated,
       },
     });
 
     return res.status(200).json({
       success: true,
-      message: `User ${user.username} updated successfully.`,
+      message: `User ${user.username} updated successfully.${passwordUpdated ? " Password updated." : ""}`,
       data: {
         id: user._id,
         name: user.name,
@@ -609,6 +629,7 @@ export const updateUser = async (req, res) => {
         cluster: user.cluster,
         centres: user.centres,
         isActive: user.isActive,
+        password: user.password ? decrypt(user.password) : "",
       },
     });
   } catch (err) {

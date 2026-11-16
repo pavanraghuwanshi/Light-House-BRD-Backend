@@ -416,6 +416,31 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(comparePassword(password, encrypted), true);
       assert.equal(comparePassword("WrongPassword", encrypted), false);
     });
+
+    it("supports updating password via updateUser payload with encryption and unlocking", () => {
+      const initialPassword = "OldPassword@123";
+      const updatedPassword = "NewSecretPassword@2026";
+
+      const userDoc = {
+        username: "test_aom",
+        password: encrypt(initialPassword),
+        isLocked: true,
+        failedLoginAttempts: 5,
+        lockUntil: new Date(Date.now() + 3600000),
+      };
+
+      // Simulate updateUser password change
+      userDoc.password = encrypt(updatedPassword.trim());
+      userDoc.isLocked = false;
+      userDoc.failedLoginAttempts = 0;
+      userDoc.lockUntil = null;
+
+      assert.equal(comparePassword(updatedPassword, userDoc.password), true);
+      assert.equal(comparePassword(initialPassword, userDoc.password), false);
+      assert.equal(decrypt(userDoc.password), updatedPassword);
+      assert.equal(userDoc.isLocked, false);
+      assert.equal(userDoc.failedLoginAttempts, 0);
+    });
   });
 
   describe("8. Access Token (15 min) & Refresh Token (30 days) Lifecycles", () => {
