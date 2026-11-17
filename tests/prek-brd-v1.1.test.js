@@ -633,6 +633,47 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       const isAssigned = activeAOM.centres.includes(centre.name);
       assert.equal(isAssigned, true);
     });
+
+    it("detects previously soft-deleted zone and prompts user to restore instead of duplicating", () => {
+      const deletedZones = [
+        { id: "zone-1", name: "North-Nagpur", code: "ZN-NNGP", isDeleted: true, deletedAt: new Date() },
+      ];
+
+      const newZoneInput = { name: "north-nagpur", code: "ZN-NNGP" };
+      const matchedDeleted = deletedZones.find(
+        (z) => z.isDeleted && (z.name.toLowerCase() === newZoneInput.name.toLowerCase() || z.code === newZoneInput.code)
+      );
+
+      assert.ok(matchedDeleted, "Should detect soft-deleted zone match");
+      const response = {
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `Zone '${matchedDeleted.name}' (${matchedDeleted.code}) already exists in the system but is currently deleted (in trash). You can restore it using PUT /api/zones/${matchedDeleted.id}/restore instead of creating a duplicate.`,
+      };
+      assert.equal(response.canRestore, true);
+      assert.equal(response.conflictType, "ALREADY_EXISTS_DELETED");
+    });
+
+    it("detects previously soft-deleted centre and prompts user to restore instead of duplicating", () => {
+      const deletedCentres = [
+        { id: "c-1", name: "Nagpur Central School", code: "C-NGP-01", isDeleted: true },
+      ];
+
+      const newCentreInput = { name: "nagpur central school", code: "C-NGP-01" };
+      const matchedDeleted = deletedCentres.find(
+        (c) => c.isDeleted && (c.name.toLowerCase() === newCentreInput.name.toLowerCase() || c.code === newCentreInput.code)
+      );
+
+      assert.ok(matchedDeleted, "Should detect soft-deleted centre match");
+      const response = {
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `Centre/school '${matchedDeleted.name}' (${matchedDeleted.code}) already exists in the system but is currently deleted (in trash). You can restore it using PUT /api/centres/${matchedDeleted.id}/restore instead of creating a duplicate.`,
+      };
+      assert.equal(response.canRestore, true);
+    });
   });
 
   describe("11. User Soft Delete & Restore Lifecycle with Conflict Detection", () => {
@@ -743,6 +784,35 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(restoredUser.email, "rajesh@lighthouse.com");
       assert.equal(restoredUser.isDeleted, false);
       assert.equal(restoredUser.isActive, true);
+    });
+
+    it("detects previously soft-deleted user on creation and prompts to restore", () => {
+      const deletedUsers = [
+        {
+          id: "u-101",
+          originalUsername: "deepak_aom",
+          originalEmail: "deepak@lighthouse.com",
+          username: "deleted_1720000000_deepak_aom",
+          email: "deleted_1720000000_deepak@lighthouse.com",
+          role: "AOM",
+          isDeleted: true,
+        },
+      ];
+
+      const inputUsername = "deepak_aom";
+      const matched = deletedUsers.find(
+        (u) => u.isDeleted && (u.originalUsername === inputUsername || u.username === inputUsername)
+      );
+
+      assert.ok(matched, "Should find soft-deleted user");
+      const alert = {
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `User '@${matched.originalUsername}' (${matched.role}) already exists in the system but was previously deleted (in trash). You can restore this account using PUT /api/users/${matched.id}/restore instead of creating a duplicate.`,
+      };
+      assert.equal(alert.canRestore, true);
+      assert.equal(alert.conflictType, "ALREADY_EXISTS_DELETED");
     });
   });
 

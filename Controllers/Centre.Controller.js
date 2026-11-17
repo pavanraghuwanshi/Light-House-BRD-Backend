@@ -69,8 +69,8 @@ export const createCentre = async (req, res) => {
       }
     }
 
-    // Check duplicate centre name or code
-    const existing = await Centre.findOne({
+    // 1. Check duplicate against ACTIVE centres
+    const existingActive = await Centre.findOne({
       $or: [
         { name: { $regex: `^${centreName}$`, $options: "i" } },
         { code: centreCode },
@@ -78,13 +78,40 @@ export const createCentre = async (req, res) => {
       isDeleted: false,
     });
 
-    if (existing) {
-      const isNameDup = existing.name.toLowerCase() === centreName.toLowerCase();
+    if (existingActive) {
+      const isNameDup = existingActive.name.toLowerCase() === centreName.toLowerCase();
       return res.status(400).json({
         success: false,
         message: isNameDup
           ? `Centre with name '${centreName}' already exists.`
           : `Centre with code '${centreCode}' already exists.`,
+      });
+    }
+
+    // 2. Check if previously SOFT-DELETED centre exists with this name/code -> prompt restore
+    const existingDeleted = await Centre.findOne({
+      $or: [
+        { name: { $regex: `^${centreName}$`, $options: "i" } },
+        { code: centreCode },
+      ],
+      isDeleted: true,
+    });
+
+    if (existingDeleted) {
+      return res.status(409).json({
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `Centre/school '${existingDeleted.name}' (${existingDeleted.code}) already exists in the system but is currently deleted (in trash). You can restore it using PUT /api/centres/${existingDeleted._id}/restore instead of creating a duplicate.`,
+        existingId: existingDeleted._id,
+        deletedCentre: {
+          id: existingDeleted._id,
+          name: existingDeleted.name,
+          code: existingDeleted.code,
+          zone: existingDeleted.zone,
+          state: existingDeleted.state,
+          deletedAt: existingDeleted.deletedAt,
+        },
       });
     }
 
@@ -452,6 +479,113 @@ export const deleteCentre = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Centre '${centre.name}' has been soft deleted successfully.`,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/centres/deleted - List Soft-Deleted Centres (Central & National Head)
+export const getDeletedCentres = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (
+      requesterRole !== PREK_ROLES.CENTRAL &&
+      requesterRole !== PREK_ROLES.NATIONAL_HEAD &&
+      req.user?.role !== "superAdmin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central and National Head can view soft-deleted centres.",
+      });
+    }
+
+    const { search, zone, state } = req.query;
+    const filter = { isDeleted: true };
+    if (zone) filter.zone = { $regex: `^${String(zone).trim()}$`, $options: "i" };
+    if (state) filter.state = { $regex: `^${String(state).trim()}$`, $options: "i" };
+    if (search && String(search).trim()) {
+      const q = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { code: { $regex: q, $options: "i" } },
+        { city: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const deletedCentres = await Centre.find(filter).sort({ deletedAt: -1 }).lean();
+
+    return res.status(200).json({
+      success: true,
+      total: deletedCentres.length,
+      data: deletedCentres,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/centres/:id/restore - Restore Soft-Deleted Centre (Central Admin Only)
+export const restoreCentre = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can restore deleted centres.",
+      });
+    }
+
+    const { id } = req.params;
+    const centre = await Centre.findOne({
+      $or: [
+        { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null },
+        { code: id.toUpperCase() },
+      ],
+      isDeleted: true,
+    });
+
+    if (!centre) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted centre not found or centre is already active.",
+      });
+    }
+
+    // Check if an active centre was created with the same name or code
+    const conflict = await Centre.findOne({
+      _id: { $ne: centre._id },
+      $or: [
+        { name: { $regex: `^${centre.name}$`, $options: "i" } },
+        { code: centre.code },
+      ],
+      isDeleted: false,
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot restore: An active centre with name '${conflict.name}' or code '${conflict.code}' already exists. Please rename or delete the existing active centre first.`,
+      });
+    }
+
+    centre.isDeleted = false;
+    centre.isActive = true;
+    centre.deletedAt = null;
+    await centre.save();
+
+    await recordAuditLog({
+      req,
+      action: "CENTRE_RESTORED",
+      entityType: "Centre",
+      entityId: centre._id,
+      details: { name: centre.name, code: centre.code, zone: centre.zone, state: centre.state },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Centre '${centre.name}' (${centre.code}) has been restored successfully.`,
+      data: centre,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

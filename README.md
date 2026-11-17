@@ -722,6 +722,18 @@ To permanently protect same-level data privacy:
 - **Success Response (`200 OK`):** `{ "success": true, "message": "Zone 'West' has been soft deleted successfully." }`
 *(Note: Blocked with HTTP 400 if active centres are still attached).*
 
+#### 6. List Soft-Deleted Zones
+- **Endpoint:** `GET /api/zones/deleted`
+- **Access:** `Central`, `National Head`
+- **Headers:** `Authorization: Bearer <token>`
+- **Success Response (`200 OK`):** Returns list of soft-deleted zones with deletion timestamps.
+
+#### 7. Restore Soft-Deleted Zone
+- **Endpoint:** `PUT /api/zones/:id/restore`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Zone 'West' (ZN-WEST) has been restored successfully." }`
+
 ---
 
 ### 6.4 Cluster Master Management (`/api/clusters`)
@@ -826,6 +838,18 @@ To permanently protect same-level data privacy:
 - **Endpoint:** `DELETE /api/clusters/:id`
 - **Success Response (`200 OK`):** Soft deletes cluster and frees BM assignment.
 
+#### 6. List Soft-Deleted Clusters
+- **Endpoint:** `GET /api/clusters/deleted`
+- **Access:** `Central`, `National Head`
+- **Headers:** `Authorization: Bearer <token>`
+- **Success Response (`200 OK`):** Returns list of soft-deleted clusters.
+
+#### 7. Restore Soft-Deleted Cluster
+- **Endpoint:** `PUT /api/clusters/:id/restore`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Cluster 'Mumbai Cluster' (CL-MUM) has been restored successfully." }`
+
 ---
 
 ### 6.5 Centre / School Master Management (`/api/centres`)
@@ -910,6 +934,18 @@ To permanently protect same-level data privacy:
 #### 5. Soft Delete Centre / School
 - **Endpoint:** `DELETE /api/centres/:id`
 - **Success Response (`200 OK`):** Soft deletes centre and automatically pulls it from any active AOM's allocation.
+
+#### 6. List Soft-Deleted Centres / Schools
+- **Endpoint:** `GET /api/centres/deleted`
+- **Access:** `Central`, `National Head`
+- **Headers:** `Authorization: Bearer <token>`
+- **Success Response (`200 OK`):** Returns list of soft-deleted centres.
+
+#### 7. Restore Soft-Deleted Centre / School
+- **Endpoint:** `PUT /api/centres/:id/restore`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Centre 'Bandra Centre' (C-BND-01) has been restored successfully." }`
 
 ---
 

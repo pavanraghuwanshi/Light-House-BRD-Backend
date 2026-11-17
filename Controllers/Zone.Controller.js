@@ -36,8 +36,8 @@ export const createZone = async (req, res) => {
     const zoneName = String(name).trim();
     const zoneCode = String(code).trim().toUpperCase();
 
-    // Check duplicate
-    const existing = await Zone.findOne({
+    // 1. Check duplicate against ACTIVE zones
+    const existingActive = await Zone.findOne({
       $or: [
         { name: { $regex: `^${zoneName}$`, $options: "i" } },
         { code: zoneCode },
@@ -45,13 +45,38 @@ export const createZone = async (req, res) => {
       isDeleted: false,
     });
 
-    if (existing) {
-      const isNameDup = existing.name.toLowerCase() === zoneName.toLowerCase();
+    if (existingActive) {
+      const isNameDup = existingActive.name.toLowerCase() === zoneName.toLowerCase();
       return res.status(400).json({
         success: false,
         message: isNameDup
           ? `Zone with name '${zoneName}' already exists.`
           : `Zone with code '${zoneCode}' already exists.`,
+      });
+    }
+
+    // 2. Check if previously SOFT-DELETED zone exists with this name/code -> prompt restore
+    const existingDeleted = await Zone.findOne({
+      $or: [
+        { name: { $regex: `^${zoneName}$`, $options: "i" } },
+        { code: zoneCode },
+      ],
+      isDeleted: true,
+    });
+
+    if (existingDeleted) {
+      return res.status(409).json({
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `Zone '${existingDeleted.name}' (${existingDeleted.code}) already exists in the system but is currently deleted (in trash). You can restore it using PUT /api/zones/${existingDeleted._id}/restore instead of creating a duplicate.`,
+        existingId: existingDeleted._id,
+        deletedZone: {
+          id: existingDeleted._id,
+          name: existingDeleted.name,
+          code: existingDeleted.code,
+          deletedAt: existingDeleted.deletedAt,
+        },
       });
     }
 
@@ -342,6 +367,107 @@ export const deleteZone = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Zone '${zone.name}' has been soft deleted successfully.`,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/zones/deleted - List Soft-Deleted Zones (Central & National Head)
+export const getDeletedZones = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (
+      requesterRole !== PREK_ROLES.CENTRAL &&
+      requesterRole !== PREK_ROLES.NATIONAL_HEAD &&
+      req.user?.role !== "superAdmin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central and National Head can view soft-deleted zones.",
+      });
+    }
+
+    const { search } = req.query;
+    const filter = { isDeleted: true };
+    if (search && String(search).trim()) {
+      const q = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { code: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const deletedZones = await Zone.find(filter).sort({ deletedAt: -1 }).lean();
+
+    return res.status(200).json({
+      success: true,
+      total: deletedZones.length,
+      data: deletedZones,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/zones/:id/restore - Restore Soft-Deleted Zone (Central Admin Only)
+export const restoreZone = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can restore deleted zones.",
+      });
+    }
+
+    const { id } = req.params;
+    const zone = await Zone.findOne({
+      $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { code: id.toUpperCase() }],
+      isDeleted: true,
+    });
+
+    if (!zone) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted zone not found or zone is already active.",
+      });
+    }
+
+    // Check if an active zone was created with the same name or code
+    const conflict = await Zone.findOne({
+      _id: { $ne: zone._id },
+      $or: [
+        { name: { $regex: `^${zone.name}$`, $options: "i" } },
+        { code: zone.code },
+      ],
+      isDeleted: false,
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot restore: An active zone with name '${conflict.name}' or code '${conflict.code}' already exists. Please rename or delete the existing active zone first.`,
+      });
+    }
+
+    zone.isDeleted = false;
+    zone.isActive = true;
+    zone.deletedAt = null;
+    await zone.save();
+
+    await recordAuditLog({
+      req,
+      action: "ZONE_RESTORED",
+      entityType: "Zone",
+      entityId: zone._id,
+      details: { name: zone.name, code: zone.code },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Zone '${zone.name}' (${zone.code}) has been restored successfully.`,
+      data: zone,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

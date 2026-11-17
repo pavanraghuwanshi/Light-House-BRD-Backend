@@ -623,6 +623,36 @@ export const createUser = async (req, res) => {
       });
     }
 
+    // Check if previously soft-deleted user exists with this username or email -> prompt restore
+    const deletedUser = await User.findOne({
+      $or: [
+        { originalUsername: cleanUsername },
+        { originalEmail: cleanEmail },
+        { username: cleanUsername },
+        { email: cleanEmail },
+      ],
+      isDeleted: true,
+    });
+
+    if (deletedUser) {
+      const origUser = deletedUser.originalUsername || cleanUsername;
+      return res.status(409).json({
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `User '@${origUser}' (${deletedUser.role}) already exists in the system but was previously deleted (in trash). You can restore this account using PUT /api/users/${deletedUser._id}/restore instead of creating a duplicate.`,
+        existingId: deletedUser._id,
+        deletedUser: {
+          id: deletedUser._id,
+          name: deletedUser.name,
+          username: origUser,
+          email: deletedUser.originalEmail || cleanEmail,
+          role: deletedUser.role,
+          deletedAt: deletedUser.deletedAt,
+        },
+      });
+    }
+
     // 5. Create New User Document
     const newUser = new User({
       name: name.trim(),

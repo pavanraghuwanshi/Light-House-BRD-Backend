@@ -56,8 +56,8 @@ export const createCluster = async (req, res) => {
       }
     }
 
-    // Check duplicate cluster name or code
-    const existing = await Cluster.findOne({
+    // 1. Check duplicate against ACTIVE clusters
+    const existingActive = await Cluster.findOne({
       $or: [
         { name: { $regex: `^${clusterName}$`, $options: "i" } },
         { code: clusterCode },
@@ -65,13 +65,39 @@ export const createCluster = async (req, res) => {
       isDeleted: false,
     });
 
-    if (existing) {
-      const isNameDup = existing.name.toLowerCase() === clusterName.toLowerCase();
+    if (existingActive) {
+      const isNameDup = existingActive.name.toLowerCase() === clusterName.toLowerCase();
       return res.status(400).json({
         success: false,
         message: isNameDup
           ? `Cluster with name '${clusterName}' already exists.`
           : `Cluster with code '${clusterCode}' already exists.`,
+      });
+    }
+
+    // 2. Check if previously SOFT-DELETED cluster exists with this name/code -> prompt restore
+    const existingDeleted = await Cluster.findOne({
+      $or: [
+        { name: { $regex: `^${clusterName}$`, $options: "i" } },
+        { code: clusterCode },
+      ],
+      isDeleted: true,
+    });
+
+    if (existingDeleted) {
+      return res.status(409).json({
+        success: false,
+        canRestore: true,
+        conflictType: "ALREADY_EXISTS_DELETED",
+        message: `Cluster '${existingDeleted.name}' (${existingDeleted.code}) already exists in the system but is currently deleted (in trash). You can restore it using PUT /api/clusters/${existingDeleted._id}/restore instead of creating a duplicate.`,
+        existingId: existingDeleted._id,
+        deletedCluster: {
+          id: existingDeleted._id,
+          name: existingDeleted.name,
+          code: existingDeleted.code,
+          zone: existingDeleted.zone,
+          deletedAt: existingDeleted.deletedAt,
+        },
       });
     }
 
@@ -517,6 +543,111 @@ export const deleteCluster = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Cluster '${cluster.name}' has been soft deleted successfully.`,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/clusters/deleted - List Soft-Deleted Clusters (Central & National Head)
+export const getDeletedClusters = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (
+      requesterRole !== PREK_ROLES.CENTRAL &&
+      requesterRole !== PREK_ROLES.NATIONAL_HEAD &&
+      req.user?.role !== "superAdmin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central and National Head can view soft-deleted clusters.",
+      });
+    }
+
+    const { search, zone } = req.query;
+    const filter = { isDeleted: true };
+    if (zone) filter.zone = { $regex: `^${String(zone).trim()}$`, $options: "i" };
+    if (search && String(search).trim()) {
+      const q = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { code: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const deletedClusters = await Cluster.find(filter).sort({ deletedAt: -1 }).lean();
+
+    return res.status(200).json({
+      success: true,
+      total: deletedClusters.length,
+      data: deletedClusters,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/clusters/:id/restore - Restore Soft-Deleted Cluster (Central Admin Only)
+export const restoreCluster = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can restore deleted clusters.",
+      });
+    }
+
+    const { id } = req.params;
+    const cluster = await Cluster.findOne({
+      $or: [
+        { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null },
+        { code: id.toUpperCase() },
+      ],
+      isDeleted: true,
+    });
+
+    if (!cluster) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted cluster not found or cluster is already active.",
+      });
+    }
+
+    // Check if an active cluster was created with the same name or code
+    const conflict = await Cluster.findOne({
+      _id: { $ne: cluster._id },
+      $or: [
+        { name: { $regex: `^${cluster.name}$`, $options: "i" } },
+        { code: cluster.code },
+      ],
+      isDeleted: false,
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot restore: An active cluster with name '${conflict.name}' or code '${conflict.code}' already exists. Please rename or delete the existing active cluster first.`,
+      });
+    }
+
+    cluster.isDeleted = false;
+    cluster.isActive = true;
+    cluster.deletedAt = null;
+    await cluster.save();
+
+    await recordAuditLog({
+      req,
+      action: "CLUSTER_RESTORED",
+      entityType: "Cluster",
+      entityId: cluster._id,
+      details: { name: cluster.name, code: cluster.code, zone: cluster.zone },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Cluster '${cluster.name}' (${cluster.code}) has been restored successfully.`,
+      data: cluster,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
