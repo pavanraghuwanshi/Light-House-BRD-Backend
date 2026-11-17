@@ -644,7 +644,7 @@ To permanently protect same-level data privacy:
 - **Endpoint:** `POST /api/zones`
 - **Access:** `Central`
 - **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
-- **Request Body:**
+- **Request Body (Multi-State Zone Example):**
   ```json
   {
     "name": "West",
@@ -653,6 +653,16 @@ To permanently protect same-level data privacy:
     "states": ["Maharashtra", "Goa", "Gujarat"]
   }
   ```
+- **Request Body (City / Regional Zone Example - e.g. North-Nagpur):**
+  ```json
+  {
+    "name": "North-Nagpur",
+    "code": "ZN-NNGP",
+    "description": "Nagpur Metro & Surrounding Region",
+    "cities": ["Nagpur", "Kamptee"]
+  }
+  ```
+  *(Note: `states` and `cities` are both **completely optional**. A zone can be defined for multiple states, a single state, a single city, multiple cities, or purely custom territory).*
 - **Success Response (`201 Created`):**
   ```json
   {

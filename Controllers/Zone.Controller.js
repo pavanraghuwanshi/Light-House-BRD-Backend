@@ -20,7 +20,7 @@ export const createZone = async (req, res) => {
       });
     }
 
-    const { name, code, description, states } = req.body;
+    const { name, code, description, states, cities } = req.body;
     const missing = [];
     if (!name || !String(name).trim()) missing.push("name");
     if (!code || !String(code).trim()) missing.push("code");
@@ -55,10 +55,17 @@ export const createZone = async (req, res) => {
       });
     }
 
+    // Both states and cities are completely optional (zones can be multi-state, single-state, multi-city, single-city, or custom territorial)
     const stateList = Array.isArray(states)
       ? states.map((s) => String(s).trim()).filter(Boolean)
       : typeof states === "string" && states.trim()
       ? states.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    const cityList = Array.isArray(cities)
+      ? cities.map((c) => String(c).trim()).filter(Boolean)
+      : typeof cities === "string" && cities.trim()
+      ? cities.split(",").map((c) => c.trim()).filter(Boolean)
       : [];
 
     const zone = new Zone({
@@ -66,6 +73,7 @@ export const createZone = async (req, res) => {
       code: zoneCode,
       description: description ? String(description).trim() : "",
       states: stateList,
+      cities: cityList,
       isActive: true,
     });
 
@@ -210,7 +218,7 @@ export const updateZone = async (req, res) => {
     }
 
     const { id } = req.params;
-    const { name, code, description, states, isActive } = req.body;
+    const { name, code, description, states, cities, isActive } = req.body;
 
     const zone = await Zone.findOne({
       $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { code: id.toUpperCase() }],
@@ -253,6 +261,13 @@ export const updateZone = async (req, res) => {
         ? states.map((s) => String(s).trim()).filter(Boolean)
         : typeof states === "string" && states.trim()
         ? states.split(",").map((s) => s.trim()).filter(Boolean)
+        : [];
+    }
+    if (cities !== undefined) {
+      zone.cities = Array.isArray(cities)
+        ? cities.map((c) => String(c).trim()).filter(Boolean)
+        : typeof cities === "string" && cities.trim()
+        ? cities.split(",").map((c) => c.trim()).filter(Boolean)
         : [];
     }
     if (typeof isActive === "boolean") zone.isActive = isActive;

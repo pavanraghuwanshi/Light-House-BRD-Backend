@@ -572,6 +572,31 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(normalizedCode, "ZN-NNP");
     });
 
+    it("allows creating a zone with flexible geography (optional states, cities, or custom administrative area)", () => {
+      // 1. Zone with only name and code (no states, no cities)
+      const pureAdminZone = { name: "Corporate Hub", code: "zn-corp" };
+      assert.ok(pureAdminZone.name && pureAdminZone.code);
+      assert.equal(pureAdminZone.states, undefined);
+      assert.equal(pureAdminZone.cities, undefined);
+
+      // 2. Zone for a single city or multiple cities
+      const cityZone = {
+        name: "North-Nagpur",
+        code: "ZN-NNGP",
+        cities: ["Nagpur", "Kamptee"],
+      };
+      assert.equal(cityZone.cities.length, 2);
+      assert.equal(cityZone.states, undefined);
+
+      // 3. Zone for multiple states
+      const multiStateZone = {
+        name: "North",
+        code: "ZN-NORTH",
+        states: ["Delhi", "Punjab", "Haryana"],
+      };
+      assert.equal(multiStateZone.states.length, 3);
+    });
+
     it("validates Centre / School Master required fields (name, code, zone, state)", () => {
       const centrePayload = {
         name: "Nagpur Central School",

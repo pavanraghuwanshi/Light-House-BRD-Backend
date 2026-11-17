@@ -32,6 +32,12 @@ const zoneSchema = new mongoose.Schema(
         trim: true,
       },
     ],
+    cities: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
     // Optional direct reference to assigned RSO user
     regionalSafetyOfficer: {
       type: mongoose.Schema.Types.ObjectId,
