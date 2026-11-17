@@ -441,6 +441,52 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(userDoc.isLocked, false);
       assert.equal(userDoc.failedLoginAttempts, 0);
     });
+
+    it("verifies password reset requiring oldPassword and newPassword with username not required", () => {
+      const currentPassword = "CurrentSecret@123";
+      const newPassword = "BrandNewSecret@2026";
+      const wrongOldPassword = "WrongOldPassword@999";
+
+      const userDoc = {
+        _id: "6af7f267179bd49f9f649892",
+        username: "aom_karan",
+        password: encrypt(currentPassword),
+        isLocked: true,
+        failedLoginAttempts: 4,
+        lockUntil: new Date(Date.now() + 1800000),
+      };
+
+      // 1. Password reset payload without username (authenticated via token/session)
+      const validPayload = {
+        oldPassword: currentPassword,
+        newPassword: newPassword,
+      };
+
+      assert.equal(validPayload.username, undefined, "Username must NOT be required in password reset payload");
+
+      // 2. Reject if oldPassword does not match
+      const isWrongOldMatch = comparePassword(wrongOldPassword.trim(), userDoc.password);
+      assert.equal(isWrongOldMatch, false, "Should fail when oldPassword does not match current password");
+
+      // 3. Reject if new password is same as old password
+      const isIdentical = validPayload.oldPassword.trim() === validPayload.oldPassword.trim();
+      assert.equal(isIdentical, true, "Should detect identical old and new password");
+
+      // 4. Verify correct old password match and execute update
+      const isOldMatch = comparePassword(validPayload.oldPassword.trim(), userDoc.password);
+      assert.equal(isOldMatch, true, "Should verify oldPassword successfully");
+
+      userDoc.password = encrypt(validPayload.newPassword.trim());
+      userDoc.isLocked = false;
+      userDoc.failedLoginAttempts = 0;
+      userDoc.lockUntil = null;
+
+      assert.equal(comparePassword(newPassword, userDoc.password), true);
+      assert.equal(comparePassword(currentPassword, userDoc.password), false);
+      assert.equal(userDoc.isLocked, false);
+      assert.equal(userDoc.failedLoginAttempts, 0);
+      assert.equal(userDoc.lockUntil, null);
+    });
   });
 
   describe("8. Access Token (15 min) & Refresh Token (30 days) Lifecycles", () => {

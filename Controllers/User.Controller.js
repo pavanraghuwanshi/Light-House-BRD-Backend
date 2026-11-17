@@ -200,47 +200,133 @@ export const loginUser = async (req, res) => {
 };
 
 /**
- * FR-1.4: Self-Service Password Reset
+ * FR-1.4: Unified Password Reset Controller
+ * Single password reset endpoint for the entire system:
+ * 1. Self-Service User: Requires `oldPassword` (or `oldPass`) and `newPassword` (or `newPass`).
+ *    `username` is NOT required (identified via authenticated Bearer token).
+ * 2. Central Administrator: Can reset any user's password using `userId` (or `username`) + `newPassword` without needing their old password.
  */
 export const resetPassword = async (req, res) => {
   try {
-    const { username, email, newPassword } = req.body;
-    if ((!username && !email) || !newPassword) {
+    const oldPassword = req.body.oldPassword || req.body.oldPass || req.body.currentPassword;
+    const newPassword = req.body.newPassword || req.body.newPass || req.body.password;
+    const targetUserId = req.body.userId || req.body.id;
+    const targetUsername = req.body.username || req.body.email;
+
+    if (!newPassword) {
       return res.status(400).json({
         success: false,
-        message: "Username or email and newPassword are required.",
+        message: "newPassword (or newPass) is required.",
+        missingFields: ["newPassword"],
       });
     }
 
-    const query = username
-      ? { username: username.toLowerCase().trim() }
-      : { email: email.toLowerCase().trim() };
+    // Determine requester identity from middleware or Authorization header
+    let requesterId = req.user?.id || req.user?._id;
+    let requesterRole = req.user?.role;
 
-    const user = await User.findOne(query);
+    if (!requesterId && req.headers?.authorization?.startsWith("Bearer ")) {
+      try {
+        const token = req.headers.authorization.split(" ")[1];
+        const secret = process.env.JWT_SECRET || "prek-default-secret-key-2026";
+        const decoded = jwt.verify(token, secret);
+        requesterId = decoded.id;
+        requesterRole = decoded.role;
+      } catch (tokenErr) {
+        // Token verify fallback
+      }
+    }
+
+    const isCentralAdmin = normalizePrekRole(requesterRole) === PREK_ROLES.CENTRAL || requesterRole === "superAdmin";
+
+    // Find the target user
+    let user;
+    if (isCentralAdmin && (targetUserId || targetUsername)) {
+      if (targetUserId) {
+        user = await User.findById(targetUserId);
+      } else {
+        user = await User.findOne({
+          $or: [
+            { username: targetUsername.toLowerCase().trim() },
+            { email: targetUsername.toLowerCase().trim() },
+          ],
+        });
+      }
+    } else if (requesterId) {
+      // Authenticated user resetting their own password
+      user = await User.findById(requesterId);
+    } else if (targetUserId) {
+      user = await User.findById(targetUserId);
+    } else if (targetUsername) {
+      user = await User.findOne({
+        $or: [
+          { username: targetUsername.toLowerCase().trim() },
+          { email: targetUsername.toLowerCase().trim() },
+        ],
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Authentication token or user identifier is required to reset password.",
+      });
+    }
+
     if (!user) {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
 
-    user.password = encrypt(newPassword.trim());
+    const isSelf = requesterId && requesterId.toString() === user._id.toString();
+
+    // When resetting own password (or non-Central admin), oldPassword verification is mandatory
+    if (!isCentralAdmin || isSelf) {
+      if (!oldPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "oldPassword (or oldPass) is required.",
+          missingFields: ["oldPassword"],
+        });
+      }
+
+      const isMatch = comparePassword(String(oldPassword).trim(), user.password);
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          message: "Incorrect old password. Please enter your valid current password.",
+        });
+      }
+
+      if (String(oldPassword).trim() === String(newPassword).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "New password cannot be the same as the old password.",
+        });
+      }
+    }
+
+    user.password = encrypt(String(newPassword).trim());
     user.isLocked = false;
     user.failedLoginAttempts = 0;
     user.lockUntil = null;
     await user.save();
+
+    if (authCache && authCache.del) {
+      authCache.del(user._id.toString());
+    }
 
     await recordAuditLog({
       req,
       userId: user._id,
       username: user.username,
       userRole: user.role,
-      action: "PASSWORD_RESET",
+      action: isCentralAdmin && !isSelf ? "PASSWORD_RESET_BY_ADMIN" : "PASSWORD_RESET",
       entityType: "User",
       entityId: user._id,
-      details: { method: "self-service" },
+      details: { targetUsername: user.username, method: isSelf ? "self-reset" : "admin-reset" },
     });
 
     return res.status(200).json({
       success: true,
-      message: "Password reset successfully. You can now log in with your new password.",
+      message: `Password for ${user.username} has been reset successfully.`,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -852,25 +938,22 @@ export const unlockUser = async (req, res) => {
 };
 
 /**
- * FR-1.4: Administrator Password Reset
+ * FR-1.4: Password Reset by User ID (Self-Reset with old/new password OR Central Admin Override)
+ * `username` is NOT required.
+ * Accepts `oldPassword` (or `oldPass`) and `newPassword` (or `newPass`).
  */
 export const adminResetPassword = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
-    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
-      return res.status(403).json({
-        success: false,
-        message: "Only Central administrators can reset user passwords.",
-      });
-    }
-
     const { id } = req.params;
-    const { newPassword } = req.body;
+    const oldPassword = req.body.oldPassword || req.body.oldPass || req.body.currentPassword;
+    const newPassword = req.body.newPassword || req.body.newPass || req.body.password;
 
     if (!newPassword) {
       return res.status(400).json({
         success: false,
-        message: "newPassword is required.",
+        message: "newPassword (or newPass) is required.",
+        missingFields: ["newPassword"],
       });
     }
 
@@ -879,18 +962,58 @@ export const adminResetPassword = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    user.password = encrypt(newPassword.trim());
+    const isSelf = req.user?.id && req.user.id.toString() === user._id.toString();
+    const isCentralAdmin = requesterRole === PREK_ROLES.CENTRAL || req.user?.role === "superAdmin";
+
+    if (!isSelf && !isCentralAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only reset your own password. Central administrator privileges required to reset other users' passwords.",
+      });
+    }
+
+    // When resetting own password, oldPassword verification is mandatory
+    if (isSelf || (!isCentralAdmin && oldPassword)) {
+      if (!oldPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "oldPassword (or oldPass) is required.",
+          missingFields: ["oldPassword"],
+        });
+      }
+
+      const isMatch = comparePassword(String(oldPassword).trim(), user.password);
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          message: "Incorrect old password. Please enter your valid current password.",
+        });
+      }
+
+      if (String(oldPassword).trim() === String(newPassword).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "New password cannot be the same as the old password.",
+        });
+      }
+    }
+
+    user.password = encrypt(String(newPassword).trim());
     user.isLocked = false;
     user.failedLoginAttempts = 0;
     user.lockUntil = null;
     await user.save();
 
+    if (authCache && authCache.del) {
+      authCache.del(user._id.toString());
+    }
+
     await recordAuditLog({
       req,
-      action: "PASSWORD_RESET_BY_ADMIN",
+      action: isCentralAdmin && !isSelf ? "PASSWORD_RESET_BY_ADMIN" : "PASSWORD_RESET",
       entityType: "User",
       entityId: user._id,
-      details: { targetUsername: user.username },
+      details: { targetUsername: user.username, method: isSelf ? "self-reset" : "admin-reset" },
     });
 
     return res.status(200).json({

@@ -41,7 +41,7 @@ router.put("/users/:id/restore", authenticateUser, restoreUser);
 // FR-1.6: Administrator Unlock Account
 router.put("/users/:id/unlock", authenticateUser, unlockUser);
 
-// FR-1.4: Administrator Password Reset
+// FR-1.4: Administrator Password Reset by User ID
 router.put("/users/:id/reset-password", authenticateUser, adminResetPassword);
 
 // FR-1.4: Activate / Deactivate Account

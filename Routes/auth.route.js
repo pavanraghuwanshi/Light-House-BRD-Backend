@@ -17,7 +17,7 @@ router.post("/refresh-token", refreshTokenHandler);
 // Logout and revoke refresh token
 router.post("/logout", logoutUser);
 
-// FR-1.4: Self-service password reset
+// FR-1.4: Password reset (requires oldPassword and newPassword, username not required)
 router.post("/reset-password", resetPassword);
 
 export default router;

@@ -293,24 +293,38 @@ To permanently protect same-level data privacy:
   { "success": true, "message": "Logged out successfully." }
   ```
 
-#### 4. Self-Service Password Reset
+#### 4. Password Reset
 - **Endpoint:** `POST /auth/reset-password`
-- **Access:** Public
-- **Headers:** `Content-Type: application/json`
+- **Access:** Authenticated (Bearer Token) / Public (with token or user identifier)
+- **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
 - **Request Body:**
   ```json
   {
-    "username": "aom_bandra",
+    "oldPassword": "CurrentPassword@123",
     "newPassword": "NewSecurePassword@123"
   }
   ```
+  *(Note: `username` is **NOT required**. User is automatically identified via authentication token. Aliases `oldPass` and `newPass` are also supported).*
 - **Success Response (`200 OK`):**
   ```json
   {
     "success": true,
-    "message": "Password reset successfully. You can now login with your new password."
+    "message": "Password reset successfully. You can now log in with your new password."
   }
   ```
+- **Error Responses:**
+  - `400 Bad Request` (Incorrect old password):
+    ```json
+    { "success": false, "message": "Incorrect old password. Please enter your valid current password." }
+    ```
+  - `400 Bad Request` (New password same as old password):
+    ```json
+    { "success": false, "message": "New password cannot be the same as the old password." }
+    ```
+  - `400 Bad Request` (Missing fields):
+    ```json
+    { "success": false, "message": "oldPassword (or oldPass) is required.", "missingFields": ["oldPassword"] }
+    ```
 
 ---
 
@@ -589,6 +603,38 @@ To permanently protect same-level data privacy:
   ```json
   { "success": true, "message": "Account for aom_karan deactivated successfully." }
   ```
+
+#### 9. Administrator Reset User Password by User ID
+- **Endpoint:** `PUT /api/users/:id/reset-password`
+- **Access:** `Central` (All-Activity Admin) / User Self-Reset
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body (Central Admin Override):**
+  ```json
+  {
+    "newPassword": "NewAdminAssignedPassword@123"
+  }
+  ```
+  *(Note: Central Admin can reset any user's password directly by user ID without needing their old password. If a non-admin calls this endpoint on their own `:id`, `oldPassword` is required and verified).*
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Password for aom_karan has been reset successfully."
+  }
+  ```
+- **Error Responses:**
+  - `400 Bad Request` (Missing new password):
+    ```json
+    { "success": false, "message": "newPassword (or newPass) is required.", "missingFields": ["newPassword"] }
+    ```
+  - `403 Forbidden` (Non-admin attempting to reset another user's password):
+    ```json
+    { "success": false, "message": "You can only reset your own password. Central administrator privileges required to reset other users' passwords." }
+    ```
+  - `404 Not Found`:
+    ```json
+    { "success": false, "message": "User not found." }
+    ```
 
 ---
 
