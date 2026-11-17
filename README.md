@@ -206,76 +206,912 @@ To permanently protect same-level data privacy:
 
 ---
 
-## 6. API Endpoints Reference
+## 6. Comprehensive API Reference (Methods, Payloads & Responses)
 
-### 6.1 Authentication, User Management & Lifecycle
+---
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `POST` | `/auth/login` | Public | Authenticates user credentials. Returns **15-minute Access Token** and **30-day Refresh Token**. Enforces 5-attempt lockout. Blocks deleted accounts. |
-| `POST` | `/auth/refresh-token` | Public | Refreshes session. Takes a valid 30-day refresh token and returns a new 15-minute access token. |
-| `POST` | `/auth/logout` | Authenticated / Public | Logs out user and revokes stored 30-day refresh token. |
-| `POST` | `/auth/reset-password` | Public | Self-service password reset using username/email and new password. |
-| `POST` | `/api/users` | `Central` | Provision a new Pre-K user account. Validates missing fields (`missingFields: [...]`), role-specific hierarchy (`AOM`, `BM`, `RSO`), distinct email/username collisions, and 1-AOM-per-centre exclusivity. |
-| `GET` | `/api/users` | `Central`, `National Head` | List active provisioned Pre-K users with decrypted plain-text passwords for administrator review. |
-| `GET` | `/api/users/deleted` | `Central`, `National Head` | List soft-deleted / trashed users with their original usernames, emails, roles, and released centres. |
-| `PUT` | `/api/users/:id` | `Central` | Update user details (name, email, phone, password/newPassword, role, zone, cluster, centres, status). Encrypts password, auto-unlocks account, and enforces 1-AOM allocation checks. |
-| `DELETE` | `/api/users/:id` | `Central` | Soft delete user account. Releases centre assignments so replacement staff can take over. |
-| `PUT` | `/api/users/:id/restore` | `Central` | Restore soft-deleted user account. Validates against active username/email conflicts and AOM centre conflicts. |
-| `PUT` | `/api/users/:id/unlock` | `Central` | Unlock an account locked by failed attempts. |
-| `PUT` | `/api/users/:id/reset-password` | `Central` | Administrator reset of a user's password. |
-| `PUT` | `/api/users/:id/status` | `Central` | Activate / deactivate user account. |
+### 6.1 Authentication, Session & User Lifecycle
 
-### 6.2 Zone Master Management
+#### 1. User Login
+- **Endpoint:** `POST /auth/login`
+- **Access:** Public
+- **Headers:** `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "username": "central_admin",
+    "password": "Password@123"
+  }
+  ```
+  *(Note: `username` accepts either username or registered email address)*
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Login successful.",
+    "user": {
+      "id": "6af7f267179bd49f9f649892",
+      "name": "Central Safety Admin",
+      "username": "central_admin",
+      "email": "central@lighthouse.com",
+      "role": "Central",
+      "zone": null,
+      "cluster": null,
+      "centres": [],
+      "loginAccess": true
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+  ```
+- **Error Responses:**
+  - `400 Bad Request` (Invalid credentials / attempts remaining):
+    ```json
+    { "success": false, "message": "Incorrect password. 2 attempts remaining before account lockout." }
+    ```
+  - `403 Forbidden` (Account Locked after 5 failed attempts):
+    ```json
+    { "success": false, "message": "Account locked: 5 consecutive failed login attempts reached. Please reset password or contact Central administrator. (FR-1.6)" }
+    ```
+  - `403 Forbidden` (Soft-deleted account):
+    ```json
+    { "success": false, "message": "This account has been deactivated or removed. Please contact your system administrator." }
+    ```
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `POST` | `/api/zones` | `Central` | Create an administrative zone (name, code, description, states). Enforces uppercase code and duplicate checks. |
-| `GET` | `/api/zones` | Authenticated | List all administrative zones enriched with dynamically aggregated centre count and active RSO details. Filterable by `search=` and `isActive=`. |
-| `GET` | `/api/zones/:id` | Authenticated | Get single zone details by ID, code, or name, including list of constituent centres and assigned RSO. |
-| `PUT` | `/api/zones/:id` | `Central` | Update zone details (name, code, description, states, isActive). Validates code and name uniqueness. |
-| `DELETE` | `/api/zones/:id` | `Central` | Soft delete zone. Blocks deletion if active centres are still attached to the zone. |
+#### 2. Refresh Access Token
+- **Endpoint:** `POST /auth/refresh-token`
+- **Access:** Public (valid 30-day refresh token required)
+- **Headers:** `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Access token refreshed successfully.",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "expiresIn": "15m"
+  }
+  ```
 
-### 6.3 Cluster Master Management (for Business Managers)
+#### 3. User Logout
+- **Endpoint:** `POST /auth/logout`
+- **Access:** Authenticated / Public
+- **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  { "success": true, "message": "Logged out successfully." }
+  ```
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `POST` | `/api/clusters` | `Central` | Create an administrative cluster under a zone. Validates zone existence, code uniqueness, and name uniqueness. |
-| `GET` | `/api/clusters` | Authenticated | List all clusters enriched with assigned Business Manager (BM), total centre count, constituent centre list, and supervised AOMs list. Filterable by `zone=`, `search=`, and `unassigned=true`. |
-| `GET` | `/api/clusters/:id` | Authenticated | Get cluster details by ID, code, or name, including assigned BM, constituent centres, and all supervised AOMs. |
-| `GET` | `/api/clusters/:id/aoms` | Authenticated | Get all Area Operations Managers (AOMs) supervised by this cluster's BM, along with their assigned centres. |
-| `PUT` | `/api/clusters/:id` | `Central` | Update cluster details (name, code, zone, description, isActive). Cascades and syncs Centre and BM records if cluster name changes. |
-| `DELETE` | `/api/clusters/:id` | `Central` | Soft delete cluster. Blocks deletion if active centres are still attached to the cluster. |
+#### 4. Self-Service Password Reset
+- **Endpoint:** `POST /auth/reset-password`
+- **Access:** Public
+- **Headers:** `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "username": "aom_bandra",
+    "newPassword": "NewSecurePassword@123"
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Password reset successfully. You can now login with your new password."
+  }
+  ```
 
-### 6.4 Centre / School Master Management
+---
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `POST` | `/api/centres` | `Central` | Create a Pre-K centre/school under a cluster, zone, and state. Validates parent zone/cluster and checks name/code uniqueness. |
-| `GET` | `/api/centres` | Authenticated | List centres filterable by `zone`, `state`, `cluster`, `search=`, and `unassigned=true`. Enriched with currently assigned active AOM. |
-| `GET` | `/api/centres/:id` | Authenticated | Get centre details with assigned AOM details and total incident count. |
-| `PUT` | `/api/centres/:id` | `Central` | Update centre details (name, code, zone, state, cluster, etc.). Automatically syncs active AOM centre assignments if name changes. |
-| `DELETE` | `/api/centres/:id` | `Central` | Soft delete centre. Automatically pulls centre from assigned AOM's allocation. |
+### 6.2 User Provisioning & Administration (`/api/users`)
 
-### 6.5 Incident Reporting, Reports & Management
+#### 1. Provision New User
+- **Endpoint:** `POST /api/users`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `POST` | `/api/add-incident` | Authenticated | Report an incident. Enforces POCSO/Corporal Punishment as Critical, assigns SLA & owner, generates Case ID. |
-| `GET` | `/api/get-incidents` | Authenticated | Scoped case log with multi-attribute filtering (`zone`, `centreName`/`schoolName`, `state`, `severity`, `status`, `type`, `dateRange`) and keyword search. Enforces horizontal peer isolation. |
-| `GET` | `/api/incident-reports` | Authenticated | Scoped incident reports API returning incident list and aggregated summary breakdown (`open`, `inProgress`, `resolved`, `closed`, `critical`, `high`, `medium`, `low`). |
-| `PUT` | `/api/update-incident/:id` | Authenticated | Update incident details (blocks downgrade of POCSO & Corporal Punishment; blocks cross-centre edits). |
-| `PUT` | `/api/update-incident-status/:id` | Authenticated | Toggle status (`Open`/`Closed`). Enforces RBAC closure matrix and centre authorization. |
-| `DELETE` | `/api/delete-incident/:id` | `Central` | Delete incident record. |
+##### Payloads by Role:
+* **Area Operations Manager (AOM):**
+  ```json
+  {
+    "name": "Karan Patel",
+    "username": "aom_karan",
+    "email": "karan@lighthouse.com",
+    "phone": "9876543211",
+    "password": "Password@123",
+    "role": "AOM",
+    "zone": "West",
+    "cluster": "Mumbai Cluster",
+    "centres": ["Bandra Centre", "Juhu Centre"]
+  }
+  ```
+* **Business Manager (BM):**
+  ```json
+  {
+    "name": "Meera Nair",
+    "username": "bm_mumbai",
+    "email": "meera@lighthouse.com",
+    "phone": "9876543222",
+    "password": "Password@123",
+    "role": "BM",
+    "zone": "West",
+    "cluster": "Mumbai Cluster"
+  }
+  ```
+* **Regional Safety Officer (RSO):**
+  ```json
+  {
+    "name": "Vikram Malhotra",
+    "username": "rso_west",
+    "email": "vikram@lighthouse.com",
+    "phone": "9876543233",
+    "password": "Password@123",
+    "role": "RSO",
+    "zone": "West"
+  }
+  ```
+* **National Head:**
+  ```json
+  {
+    "name": "Dr. Ananya Roy",
+    "username": "national_head",
+    "email": "ananya@lighthouse.com",
+    "phone": "9876543244",
+    "password": "Password@123",
+    "role": "National Head"
+  }
+  ```
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "success": true,
+    "message": "User aom_karan (AOM) provisioned successfully.",
+    "data": {
+      "id": "6738f9b9487c53d10034a101",
+      "name": "Karan Patel",
+      "username": "aom_karan",
+      "email": "karan@lighthouse.com",
+      "phone": "9876543211",
+      "role": "AOM",
+      "zone": "West",
+      "cluster": "Mumbai Cluster",
+      "centres": ["Bandra Centre", "Juhu Centre"],
+      "isActive": true,
+      "password": "Password@123"
+    }
+  }
+  ```
+- **Error Responses:**
+  - `400 Bad Request` (Missing required fields):
+    ```json
+    {
+      "success": false,
+      "message": "Missing required fields: email, phone.",
+      "missingFields": ["email", "phone"]
+    }
+    ```
+  - `400 Bad Request` (1-AOM-per-centre conflict):
+    ```json
+    {
+      "success": false,
+      "message": "Centre allocation conflict: A single centre cannot have multiple AOMs. Conflicting assignments: Pooja (@aom_pooja) already manages: Bandra Centre",
+      "conflicts": ["Pooja (@aom_pooja) already manages: Bandra Centre"]
+    }
+    ```
+  - `400 Bad Request` (1-BM-per-cluster conflict):
+    ```json
+    {
+      "success": false,
+      "message": "Cluster allocation conflict: A single cluster cannot have multiple Business Managers. Cluster 'Mumbai Cluster' is already managed by Meera Nair (@bm_mumbai)."
+    }
+    ```
 
-### 6.6 Dashboards & Reference Data
+#### 2. List Active Users
+- **Endpoint:** `GET /api/users`
+- **Access:** `Central`, `National Head`, `BM` (BM automatically scoped to AOMs under their cluster)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `role=AOM`, `zone=West`, `cluster=Mumbai Cluster`, `search=karan`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "data": [
+      {
+        "_id": "6738f9b9487c53d10034a101",
+        "name": "Karan Patel",
+        "username": "aom_karan",
+        "email": "karan@lighthouse.com",
+        "phone": "9876543211",
+        "role": "AOM",
+        "zone": "West",
+        "cluster": "Mumbai Cluster",
+        "centres": ["Bandra Centre", "Juhu Centre"],
+        "isActive": true,
+        "password": "Password@123"
+      }
+    ]
+  }
+  ```
 
-| Method | Endpoint | Access / Role | Description |
-|---|---|---|---|
-| `GET` | `/api/national-dashboard` | Authenticated | **National Dashboard (FR-3.1 - FR-3.5):** National metrics, 23-state tile map with rate bands, zone comparison, states to watch, and state drill-down (`?state=...`). |
-| `GET` | `/api/incident-stats` | Authenticated | **Zone Overview Dashboard (FR-4.1 - FR-4.6):** KPI cards, severity trends, severity-mix, region comparison, and Type × Region matrix. |
-| `GET` | `/api/escalation-matrix` | Public / All | **Standing Reference (FR-5.3):** Viewable escalation rules, SLAs, required actions, and default type severities. |
-| `GET` | `/api/audit-logs` | `Central` | Paginated audit trail of all security and case lifecycle events (FR-1.5) with full-text/keyword search (`search=`), date range filtering (`startDate=`, `endDate=`), action, and entity type filters. |
+#### 3. List Soft-Deleted / Trashed Users
+- **Endpoint:** `GET /api/users/deleted`
+- **Access:** `Central`, `National Head`
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `role=AOM`, `zone=West`, `search=karan`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "data": [
+      {
+        "id": "6738f9b9487c53d10034a101",
+        "name": "Karan Patel",
+        "username": "aom_karan",
+        "email": "karan@lighthouse.com",
+        "phone": "9876543211",
+        "role": "AOM",
+        "zone": "West",
+        "cluster": "Mumbai Cluster",
+        "previousCentres": ["Bandra Centre", "Juhu Centre"],
+        "deletedAt": "2026-11-17T08:00:00.000Z",
+        "deletedBy": { "name": "Central Safety Admin", "username": "central_admin" },
+        "isDeleted": true
+      }
+    ]
+  }
+  ```
+
+#### 4. Update User Details & Password
+- **Endpoint:** `PUT /api/users/:id`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "name": "Karan P.",
+    "phone": "9876543299",
+    "password": "NewUpdatedPassword@123",
+    "centres": ["Bandra Centre"],
+    "isActive": true
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "User aom_karan updated successfully. Password updated.",
+    "data": {
+      "id": "6738f9b9487c53d10034a101",
+      "name": "Karan P.",
+      "username": "aom_karan",
+      "email": "karan@lighthouse.com",
+      "phone": "9876543299",
+      "role": "AOM",
+      "centres": ["Bandra Centre"],
+      "isActive": true,
+      "password": "NewUpdatedPassword@123"
+    }
+  }
+  ```
+
+#### 5. Soft Delete User Account
+- **Endpoint:** `DELETE /api/users/:id`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "User 'aom_karan' has been soft deleted successfully. Assigned centres have been released and can now be reassigned.",
+    "data": {
+      "id": "6738f9b9487c53d10034a101",
+      "username": "aom_karan",
+      "email": "karan@lighthouse.com",
+      "role": "AOM",
+      "deletedAt": "2026-11-17T08:00:00.000Z",
+      "previousCentres": ["Bandra Centre", "Juhu Centre"]
+    }
+  }
+  ```
+
+#### 6. Restore Soft-Deleted User Account
+- **Endpoint:** `PUT /api/users/:id/restore`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body (Optional, if reassigning centres):**
+  ```json
+  {
+    "centres": ["Bandra Centre"]
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "User '@aom_karan' (AOM) has been restored successfully.",
+    "data": {
+      "id": "6738f9b9487c53d10034a101",
+      "name": "Karan Patel",
+      "username": "aom_karan",
+      "email": "karan@lighthouse.com",
+      "role": "AOM",
+      "centres": ["Bandra Centre"],
+      "isActive": true
+    }
+  }
+  ```
+- **Error Responses:**
+  - `409 Conflict` (Active username exists):
+    ```json
+    {
+      "success": false,
+      "message": "Cannot restore: An active user with username '@aom_karan' already exists (Karan V., role: AOM). To restore this user, either rename or delete the existing active user first.",
+      "conflictType": "USERNAME_EXISTS"
+    }
+    ```
+  - `409 Conflict` (Centres reallocated to another active AOM):
+    ```json
+    {
+      "success": false,
+      "message": "Cannot restore AOM with original centres: Centre allocation conflict. Conflicting assignments: Pooja (@aom_pooja) currently manages: Bandra Centre. Please provide new unassigned centres or reassign existing active AOMs first.",
+      "conflictType": "CENTRE_ALLOCATION_CONFLICT"
+    }
+    ```
+
+#### 7. Administrator Unlock User Account
+- **Endpoint:** `PUT /api/users/:id/unlock`
+- **Access:** `Central`
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Success Response (`200 OK`):**
+  ```json
+  { "success": true, "message": "Account for aom_karan has been unlocked successfully." }
+  ```
+
+#### 8. Toggle User Active / Inactive Status
+- **Endpoint:** `PUT /api/users/:id/status`
+- **Access:** `Central`
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body:** `{ "active": false }`
+- **Success Response (`200 OK`):**
+  ```json
+  { "success": true, "message": "Account for aom_karan deactivated successfully." }
+  ```
+
+---
+
+### 6.3 Zone Master Management (`/api/zones`)
+
+#### 1. Create Zone
+- **Endpoint:** `POST /api/zones`
+- **Access:** `Central`
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "name": "West",
+    "code": "ZN-WEST",
+    "description": "Western Administrative Zone",
+    "states": ["Maharashtra", "Goa", "Gujarat"]
+  }
+  ```
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "success": true,
+    "message": "Zone 'West' created successfully.",
+    "data": {
+      "_id": "6738f9...",
+      "name": "West",
+      "code": "ZN-WEST",
+      "description": "Western Administrative Zone",
+      "states": ["Maharashtra", "Goa", "Gujarat"],
+      "isActive": true
+    }
+  }
+  ```
+
+#### 2. List All Zones
+- **Endpoint:** `GET /api/zones`
+- **Access:** Authenticated (All Roles)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `search=west`, `isActive=true`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "data": [
+      {
+        "_id": "6738f9...",
+        "name": "West",
+        "code": "ZN-WEST",
+        "states": ["Maharashtra", "Goa", "Gujarat"],
+        "centreCount": 7,
+        "activeRSO": {
+          "id": "6738f9...",
+          "name": "Vikram Malhotra",
+          "username": "rso_west",
+          "email": "rso.west@lighthouse.com",
+          "phone": "9876543233"
+        }
+      }
+    ]
+  }
+  ```
+
+#### 3. Get Zone by ID or Code
+- **Endpoint:** `GET /api/zones/:id` *(or `/api/zones/ZN-WEST`)*
+- **Success Response (`200 OK`):** Returns zone details with attached centres array and active RSO.
+
+#### 4. Update Zone
+- **Endpoint:** `PUT /api/zones/:id`
+- **Request Body:** `{ "description": "Updated Zone Description", "states": ["Maharashtra", "Goa", "Gujarat"] }`
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Zone 'West' updated successfully." }`
+
+#### 5. Soft Delete Zone
+- **Endpoint:** `DELETE /api/zones/:id`
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Zone 'West' has been soft deleted successfully." }`
+*(Note: Blocked with HTTP 400 if active centres are still attached).*
+
+---
+
+### 6.4 Cluster Master Management (`/api/clusters`)
+
+#### 1. Create Cluster
+- **Endpoint:** `POST /api/clusters`
+- **Access:** `Central`
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "name": "Mumbai Cluster",
+    "code": "CL-MUM",
+    "zone": "West",
+    "description": "Mumbai Metropolitan Area Pre-K Cluster"
+  }
+  ```
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "success": true,
+    "message": "Cluster 'Mumbai Cluster' created successfully in Zone 'West'.",
+    "data": {
+      "_id": "6738f9...",
+      "name": "Mumbai Cluster",
+      "code": "CL-MUM",
+      "zone": "West",
+      "isActive": true
+    }
+  }
+  ```
+
+#### 2. List All Clusters
+- **Endpoint:** `GET /api/clusters`
+- **Access:** Authenticated (All Roles)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `zone=West`, `search=mumbai`, `unassigned=true`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "data": [
+      {
+        "_id": "6738f9...",
+        "name": "Mumbai Cluster",
+        "code": "CL-MUM",
+        "zone": "West",
+        "centreCount": 4,
+        "centres": ["Bandra Centre", "Andheri Centre", "Juhu Centre", "Colaba Centre"],
+        "assignedBM": {
+          "id": "6738f9...",
+          "name": "Meera Nair",
+          "username": "bm_mumbai",
+          "email": "bm.mumbai@lighthouse.com",
+          "phone": "9876543222"
+        },
+        "aomCount": 2,
+        "supervisedAOMs": [
+          {
+            "id": "6738f9...",
+            "name": "Karan Patel",
+            "username": "aom_bandra",
+            "managedCentres": ["Bandra Centre", "Juhu Centre"]
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+#### 3. Get Supervised AOMs within a Cluster
+- **Endpoint:** `GET /api/clusters/:id/aoms`
+- **Access:** Authenticated (BM, Central, National Head)
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "cluster": "Mumbai Cluster",
+    "zone": "West",
+    "totalAOMs": 2,
+    "data": [
+      {
+        "id": "6738f9...",
+        "name": "Karan Patel",
+        "username": "aom_bandra",
+        "email": "karan@lighthouse.com",
+        "phone": "9876543211",
+        "centresInThisCluster": ["Bandra Centre", "Juhu Centre"],
+        "allCentres": ["Bandra Centre", "Juhu Centre"]
+      }
+    ]
+  }
+  ```
+
+#### 4. Update Cluster
+- **Endpoint:** `PUT /api/clusters/:id`
+- **Request Body:** `{ "description": "Updated Cluster Description" }`
+- **Success Response (`200 OK`):** Automatically cascades and updates Centre and BM records if name changes.
+
+#### 5. Soft Delete Cluster
+- **Endpoint:** `DELETE /api/clusters/:id`
+- **Success Response (`200 OK`):** Soft deletes cluster and frees BM assignment.
+
+---
+
+### 6.5 Centre / School Master Management (`/api/centres`)
+
+#### 1. Create Centre / School
+- **Endpoint:** `POST /api/centres`
+- **Access:** `Central`
+- **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "name": "Bandra Centre",
+    "code": "C-BND-01",
+    "zone": "West",
+    "cluster": "Mumbai Cluster",
+    "state": "Maharashtra",
+    "city": "Mumbai",
+    "address": "Hill Road, Bandra West",
+    "pincode": "400050",
+    "contactPhone": "022-26400111",
+    "contactEmail": "bandra@lighthouse.com"
+  }
+  ```
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "success": true,
+    "message": "Centre 'Bandra Centre' created successfully.",
+    "data": {
+      "_id": "6738f9...",
+      "name": "Bandra Centre",
+      "code": "C-BND-01",
+      "zone": "West",
+      "cluster": "Mumbai Cluster",
+      "state": "Maharashtra",
+      "city": "Mumbai",
+      "isActive": true
+    }
+  }
+  ```
+
+#### 2. List Centres / Schools
+- **Endpoint:** `GET /api/centres`
+- **Access:** Authenticated (All Roles)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `zone=West`, `state=Maharashtra`, `cluster=Mumbai Cluster`, `search=bandra`, `unassigned=true`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "data": [
+      {
+        "_id": "6738f9...",
+        "name": "Bandra Centre",
+        "code": "C-BND-01",
+        "zone": "West",
+        "cluster": "Mumbai Cluster",
+        "state": "Maharashtra",
+        "city": "Mumbai",
+        "assignedAOM": {
+          "id": "6738f9...",
+          "name": "Karan Patel",
+          "username": "aom_bandra",
+          "email": "aom.bandra@lighthouse.com"
+        },
+        "isAssigned": true
+      }
+    ]
+  }
+  ```
+
+#### 3. Get Centre Details by ID or Code
+- **Endpoint:** `GET /api/centres/:id` *(or `/api/centres/C-BND-01`)*
+- **Success Response (`200 OK`):** Returns centre record with assigned AOM details and total incident count.
+
+#### 4. Update Centre / School
+- **Endpoint:** `PUT /api/centres/:id`
+- **Request Body:** `{ "address": "New Address", "contactPhone": "022-26400999" }`
+- **Success Response (`200 OK`):** If name changes, automatically syncs active AOM centre assignments.
+
+#### 5. Soft Delete Centre / School
+- **Endpoint:** `DELETE /api/centres/:id`
+- **Success Response (`200 OK`):** Soft deletes centre and automatically pulls it from any active AOM's allocation.
+
+---
+
+### 6.6 Incident Reporting, Reports & Case Management
+
+#### 1. Report Incident
+- **Endpoint:** `POST /api/add-incident`
+- **Access:** Authenticated (All Provisioned Staff)
+- **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "zone": "West",
+    "centreName": "Bandra Centre",
+    "state": "Maharashtra",
+    "incidentType": "POCSO",
+    "reporterName": "Karan Patel",
+    "reporterRole": "AOM",
+    "description": "Child reported inappropriate contact by unauthorized visitor on school premises.",
+    "immediateActionTaken": "Child immediately moved to safety and evaluated by school counselor. Parents informed.",
+    "pendingAction": "Police FIR to be registered under POCSO Act.",
+    "stakeholders": ["Parents", "Local Police", "School Principal"]
+  }
+  ```
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "success": true,
+    "message": "Incident report logged successfully.",
+    "data": {
+      "caseId": "INC-20261117-4821",
+      "incidentType": "POCSO",
+      "severity": "Critical",
+      "status": "Open",
+      "escalationOwner": "Central",
+      "escalationOwnerRole": "Central",
+      "sla": "2 hours (immediate)",
+      "slaDeadline": "2026-11-17T16:14:42.000Z",
+      "zone": "West",
+      "state": "Maharashtra",
+      "centreName": "Bandra Centre",
+      "reporterName": "Karan Patel",
+      "reporterRole": "AOM"
+    }
+  }
+  ```
+
+#### 2. Get Scoped Incidents Case Log
+- **Endpoint:** `GET /api/get-incidents`
+- **Access:** Authenticated (Role Scoped: AOM sees own centres; BM sees cluster; RSO sees zone; National/Central see national)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:**
+  - `zone=West`: Filter by zone
+  - `centreName=Bandra Centre`: Filter by centre/school
+  - `state=Maharashtra`: Filter by state
+  - `cluster=Mumbai Cluster`: Filter by cluster
+  - `severity=Critical`: Filter by `Low`, `Medium`, `High`, or `Critical`
+  - `status=Open`: Filter by `Open`, `In Progress`, `Resolved`, or `Closed`
+  - `incidentType=POCSO`: Filter by type
+  - `startDate=2026-01-01&endDate=2026-03-31`: Filter by date range
+  - `search=playground`: Multi-field search across Case ID, description, centre, reporter, state
+  - `page=1&limit=10`: Pagination
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "page": 1,
+    "limit": 10,
+    "data": [
+      {
+        "_id": "6738f9...",
+        "caseId": "INC-20261117-4821",
+        "incidentType": "POCSO",
+        "severity": "Critical",
+        "status": "Open",
+        "zone": "West",
+        "state": "Maharashtra",
+        "centreName": "Bandra Centre",
+        "escalationOwner": "Central",
+        "sla": "2 hours (immediate)",
+        "slaDeadline": "2026-11-17T16:14:42.000Z"
+      }
+    ]
+  }
+  ```
+
+#### 3. Incident Reports with Summary Metrics Breakdown
+- **Endpoint:** `GET /api/incident-reports`
+- **Access:** Authenticated (Role Scoped)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** Same rich filters as `GET /api/get-incidents` (`zone`, `centreName`, `state`, `severity`, `status`, `startDate`, `endDate`, `search`)
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 42,
+    "page": 1,
+    "limit": 10,
+    "summary": {
+      "total": 42,
+      "open": 8,
+      "inProgress": 4,
+      "resolved": 12,
+      "closed": 18,
+      "critical": 3,
+      "high": 9,
+      "medium": 15,
+      "low": 15
+    },
+    "data": [ ...incidents... ]
+  }
+  ```
+
+#### 4. Update Incident Details
+- **Endpoint:** `PUT /api/update-incident/:id`
+- **Access:** Authenticated (Authorized for that centre)
+- **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "description": "Updated incident report notes",
+    "immediateActionTaken": "Child counseling initiated.",
+    "pendingAction": "Police follow-up on Friday."
+  }
+  ```
+- **Downgrade Restriction Rule (FR-5.2):** If a user tries to downgrade severity of POCSO or Corporal Punishment:
+  ```json
+  {
+    "success": false,
+    "message": "POCSO and Corporal Punishment incidents are legally mandated as Critical severity and cannot be downgraded by any user role (FR-5.2)."
+  }
+  ```
+
+#### 5. Update Incident Status & Case Closure
+- **Endpoint:** `PUT /api/update-incident-status/:id`
+- **Access:** Authenticated (Role Closure Authority Enforced: FR-7.2)
+- **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+- **Request Body:**
+  ```json
+  {
+    "status": "Closed",
+    "remarks": "Investigation complete. Mandatory reporting executed and child safely in school."
+  }
+  ```
+- **Permission Block Error (`403 Forbidden`):**
+  ```json
+  {
+    "success": false,
+    "message": "Unauthorized: Role Area Operations Manager (AOM) cannot close Critical incidents. Mandatory closure authority: Central (FR-7.2)."
+  }
+  ```
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Incident INC-20261117-4821 status updated to Closed.",
+    "data": { "caseId": "INC-20261117-4821", "status": "Closed", "closedBy": "Central Safety Admin" }
+  }
+  ```
+
+#### 6. Delete Incident
+- **Endpoint:** `DELETE /api/delete-incident/:id`
+- **Access:** `Central` (All-Activity Admin)
+- **Success Response (`200 OK`):** `{ "success": true, "message": "Incident INC-20261117-4821 deleted successfully." }`
+
+---
+
+### 6.7 Analytics Dashboards, Escalation Matrix & Audit Trail
+
+#### 1. National Analytics Dashboard
+- **Endpoint:** `GET /api/national-dashboard`
+- **Access:** Authenticated (Central, National Head)
+- **Headers:** `Authorization: Bearer <token>`
+- **Query Parameters:** `?state=Maharashtra` (Drill-down for specific state)
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "data": {
+      "nationalOverview": {
+        "totalCentres": 2260,
+        "totalIncidents": 142,
+        "nationalIncidentRatePer100Centres": "6.28",
+        "nationalRateBand": "High"
+      },
+      "stateTileMap": [
+        {
+          "state": "Maharashtra",
+          "totalCentres": 260,
+          "incidentCount": 24,
+          "ratePer100Centres": "9.23",
+          "rateBand": "High"
+        }
+      ],
+      "statesToWatch": [
+        { "state": "Maharashtra", "incidentCount": 24, "ratePer100Centres": "9.23", "rateBand": "High" }
+      ],
+      "zoneComparison": [
+        { "zone": "West", "centreCount": 350, "incidentCount": 32, "ratePer100Centres": "9.14" }
+      ]
+    }
+  }
+  ```
+
+#### 2. Zone Overview Dashboard
+- **Endpoint:** `GET /api/incident-stats`
+- **Access:** Authenticated (RSO, BM, Central, National Head)
+- **Query Parameters:** `zone=West`, `startDate=2026-01-01`, `endDate=2026-03-31`
+- **Success Response (`200 OK`):** KPI summary cards, monthly severity trend line, severity-mix donut, and Type × Region cross-tabulation matrix.
+
+#### 3. Standing Escalation Matrix Reference
+- **Endpoint:** `GET /api/escalation-matrix`
+- **Access:** Public / All Authenticated
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "escalationMatrix": {
+      "Critical": { "ownerRole": "Central", "sla": "2 hours (immediate)", "closureAuthority": ["Central"] },
+      "High": { "ownerRole": "RSO", "sla": "24 hours", "closureAuthority": ["RSO", "National Head", "Central"] },
+      "Medium": { "ownerRole": "BM", "sla": "48 hours", "closureAuthority": ["BM", "RSO", "National Head", "Central"] },
+      "Low": { "ownerRole": "AOM", "sla": "3 working days (72 hrs)", "closureAuthority": ["AOM", "BM", "RSO", "National Head", "Central"] }
+    },
+    "incidentTypes": {
+      "POCSO": { "defaultSeverity": "Critical", "nonDowngradable": true },
+      "Corporal Punishment": { "defaultSeverity": "Critical", "nonDowngradable": true }
+    }
+  }
+  ```
+
+#### 4. Audit Trail Search
+- **Endpoint:** `GET /api/audit-logs`
+- **Access:** `Central` (All-Activity Admin)
+- **Headers:** `Authorization: Bearer <central_token>`
+- **Query Parameters:** `search=aom_bandra`, `action=INCIDENT_CREATED`, `startDate=2026-11-01`, `endDate=2026-11-17`, `page=1`, `limit=20`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "page": 1,
+    "limit": 20,
+    "data": [
+      {
+        "_id": "6738f9...",
+        "action": "INCIDENT_CREATED",
+        "username": "aom_bandra",
+        "userRole": "AOM",
+        "entityType": "Incident",
+        "entityId": "6738fa...",
+        "details": { "caseId": "INC-20261117-4821", "severity": "Critical" },
+        "ipAddress": "127.0.0.1",
+        "createdAt": "2026-11-17T12:00:00.000Z"
+      }
+    ]
+  }
+  ```
 
 ---
 
