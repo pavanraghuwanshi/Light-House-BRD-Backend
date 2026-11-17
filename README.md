@@ -23,6 +23,9 @@ This system replaces legacy ad-hoc prototype structures and implements:
 
 ## 2. 5-Tier User Role Hierarchy & Access Scope
 
+> [!TIP]
+> For a complete, in-depth architectural breakdown of the 5-tier role hierarchy, jurisdiction scoping, peer isolation, creation rules, case resolution matrix, and clean cURL examples, see the dedicated [PREK_ROLE_HIERARCHY_AND_ACCESS_CONTROL_GUIDE.md](file:///d:/Pavan%20Raghuwanshi/HBG%20Projects/Light%20House%20Project/Prototype-Light-House-Backend/PREK_ROLE_HIERARCHY_AND_ACCESS_CONTROL_GUIDE.md).
+
 | Role | Approx. Users | Access Scope | Key Permissions & Responsibilities |
 |---|---|---|---|
 | **Area Operations Manager (AOM)** | ~60 | Own centre(s) / local area (~30–35 centres per AOM) | Report incidents; resolve & close **Low-severity** cases; view own area's case log. |
@@ -128,14 +131,51 @@ To permanently protect same-level data privacy:
 ### FR-1.1 to FR-1.6: Authentication & User Administration
 - **Unique Accounts (FR-1.1):** Individual email/username and encrypted credentials for all provisioned users.
 - **Account Lockout Policy (FR-1.6):** Accounts lock automatically after **5 consecutive failed login attempts**. Return HTTP 403 with lockout message.
-- **Audit Logging (FR-1.5):** Asynchronously records all logins (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `ACCOUNT_LOCKED`), case lifecycle actions (`INCIDENT_CREATED`, `INCIDENT_STATUS_CHANGED`, `INCIDENT_CLOSED`), and user provisioning (`USER_CREATED`, `USER_UPDATED`).
+- **Audit Logging (FR-1.5):** Asynchronously records all logins (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `ACCOUNT_LOCKED`), case lifecycle actions (`INCIDENT_CREATED`, `INCIDENT_STATUS_CHANGED`, `INCIDENT_CLOSED`), and user provisioning (`USER_CREATED`, `USER_UPDATED`). Supports multi-attribute keyword search (`search=`) across actions, user attributes, entity IDs, reasons, and IPs.
 - **Self-Service & Admin Management (FR-1.4):**
+  - `POST /auth/login`: Authenticates user credentials. Issues 15-minute access token and 30-day refresh token.
+  - `POST /auth/refresh-token`: Generates a new 15-minute access token using a valid 30-day refresh token.
   - `POST /auth/reset-password`: Self-service reset endpoint.
-  - `POST /api/users`: Central admin creates user (enforces 1-AOM-per-centre validation).
-  - `GET /api/users`: List users with role/zone filters.
-  - `PUT /api/users/:id`: Reassign roles, zones, clusters, or centres (with conflict detection).
+  - `POST /api/users`: Central admin provisions users with strict, explicit field validation:
+    - **Missing Field Validation:** Checks `name`, `username`, `email`, `phone`, `password`, and `role`. If any field is missing, returns HTTP 400 with a descriptive message and a `missingFields: [...]` array (e.g. `{"success": false, "message": "Missing required field: email.", "missingFields": ["email"]}`).
+    - **Distinct Duplicate Validation:** Returns explicit messages distinguishing whether `username` is already taken (`"Username 'xxx' is already registered"`) or `email` is taken (`"Email 'xxx' is already registered"`).
+    - **BRD v1.1 Role Hierarchy Validation:**
+      - `AOM`: Requires `zone` and a non-empty `centres` array (enforces 1-AOM-per-centre exclusivity).
+      - `BM`: Requires `zone` and `cluster`.
+      - `RSO`: Requires `zone`.
+      - `National Head` & `Central`: National scope (no zone/cluster required).
+    - **Pure Modern Schema:** Completely eliminates deprecated prototype fields (`schoolId`, `branchGroupName`, `AssignedBranch`) for a clean, scalable architecture.
+  - `GET /api/users`: Lists active users with role/zone filters and decrypted plain-text passwords for Central Admin review.
+  - `GET /api/users/deleted`: Lists all soft-deleted / trashed users with their original usernames, emails, roles, released centre assignments, and deletion timestamps.
+  - `PUT /api/users/:id`: Updates user profiles:
+    - Supports password updates via `password` or `newPassword` (encrypted via AES-256-CBC, auto-unlocks locked accounts, and resets `failedLoginAttempts: 0`).
+    - Supports updates to `phone`, `email` (with duplicate verification against other accounts), `name`, `role`, `zone`, `cluster`, `centres`, and `isActive`.
+    - Automatically validates 1-AOM-per-centre allocation whenever centres are reassigned.
+  - `DELETE /api/users/:id`: **Soft Delete Account (FR-1.4 / Lifecycle):** Safely deactivates and archives the user account (`isDeleted: true`), frees up assigned centres immediately so replacement staff can take over, and archives original credentials.
+  - `PUT /api/users/:id/restore`: **Restore Soft-Deleted Account:** Restores a trashed user account with automated collision prevention:
+    - Verifies if an active user already took that `username` while deleted (returns HTTP 409 conflict: *"Cannot restore: An active user with username '@...' already exists. To restore this user, either rename or delete the existing active user first."*).
+    - Verifies if an active user already took that `email` while deleted (returns HTTP 409 conflict).
+    - If user is an `AOM`, checks if their original centres are currently assigned to another active AOM (returns HTTP 409 conflict).
+    - If clean, restores the account to full active status.
   - `PUT /api/users/:id/unlock`: Unlock locked accounts.
   - `PUT /api/users/:id/status`: Activate / deactivate accounts.
+
+### Master Data Architecture: 3-Tier Organizational Hierarchy (Zone -> Cluster -> Centre)
+1. **Creation Sequence & Administrative Ownership:**
+   - **Tier 1: Zone Master (`POST /api/zones`):** Administrative zones (e.g. `North`, `West`, `South`, `East`, `Central`) are created first with their constituent states. Supervised by **Regional Safety Officers (RSO)**.
+   - **Tier 2: Cluster Master (`POST /api/clusters`):** Administrative clusters (e.g. `Mumbai Cluster`, `Pune Cluster`, `Delhi Cluster`) are created under a parent zone. Each cluster is assigned to a **Business Manager (BM)** with strict **1-BM-per-cluster exclusivity**.
+   - **Tier 3: Centre / School Master (`POST /api/centres`):** Pre-K centres (e.g. `Centre Bandra`, `Delhi Model School`) are registered under their parent cluster, zone, and state. Managed locally by an **Area Operations Manager (AOM)** with strict **1-AOM-per-centre exclusivity**.
+2. **Business Manager (BM) & AOM Supervision Model:**
+   - When centres are created under a cluster (e.g. `Bandra Centre` under `Mumbai Cluster`), the Business Manager of `Mumbai Cluster` **automatically supervises all AOMs** managing those centres (`GET /api/clusters/:id/aoms`).
+   - All incident reports from those centres roll up to the cluster's BM, and onwards to the Zone's RSO.
+3. **Dynamic Personnel Assignment & Replacement Model:**
+   - **Centres Assigned to AOM / Clusters to BM:** Personnel are mapped to entities from the master tables.
+   - **Incident Ownership Anchored to Masters:** Incident reports belong to the centre, cluster, and zone, **NOT** to temporary personal MongoDB user IDs.
+   - **Staff Transitions (Promotions / Resignations / Replacements):**
+     - If an AOM leaves or is promoted, their account is soft-deleted, freeing up the centres. The replacement AOM assigned to those centres **instantly and automatically sees all historical, active, and resolved incident reports** for those centres.
+     - If a Business Manager leaves or is replaced, the incoming BM assigned to that cluster immediately inherits oversight of that entire cluster, all its centres, and all its AOMs.
+     - If a Regional Safety Officer (RSO) leaves, the incoming RSO assigned to that zone immediately inherits oversight of all clusters, centres, and incidents across that zone.
+     - If a user is promoted to National Head, their data scope expands nationally across all 23 states.
 
 ### FR-3.1 to FR-3.5: National Dashboard & Rate Band Analytics
 - **Total Centre Baseline (FR-3.1):** Aggregates across the 23-state pre-K network baseline (~2,260 centres across North, South, East, West, and Central zones).
@@ -168,39 +208,74 @@ To permanently protect same-level data privacy:
 
 ## 6. API Endpoints Reference
 
-### 6.1 Authentication & User Management
+### 6.1 Authentication, User Management & Lifecycle
 
 | Method | Endpoint | Access / Role | Description |
 |---|---|---|---|
-| `POST` | `/auth/login` | Public | Authenticates user credentials. Returns **15-minute Access Token** and **30-day Refresh Token**. Enforces 5-attempt lockout. |
+| `POST` | `/auth/login` | Public | Authenticates user credentials. Returns **15-minute Access Token** and **30-day Refresh Token**. Enforces 5-attempt lockout. Blocks deleted accounts. |
 | `POST` | `/auth/refresh-token` | Public | Refreshes session. Takes a valid 30-day refresh token and returns a new 15-minute access token. |
 | `POST` | `/auth/logout` | Authenticated / Public | Logs out user and revokes stored 30-day refresh token. |
 | `POST` | `/auth/reset-password` | Public | Self-service password reset using username/email and new password. |
-| `POST` | `/api/users` | `Central` | Provision a new Pre-K user account. Validates 1-AOM-per-centre allocation. |
-| `GET` | `/api/users` | `Central`, `National Head` | List all provisioned Pre-K users with decrypted plain-text passwords for administrator review. |
-| `PUT` | `/api/users/:id` | `Central` | Update user details (name, email, password, role, zone, cluster, centres, status). Checks centre conflict. |
+| `POST` | `/api/users` | `Central` | Provision a new Pre-K user account. Validates missing fields (`missingFields: [...]`), role-specific hierarchy (`AOM`, `BM`, `RSO`), distinct email/username collisions, and 1-AOM-per-centre exclusivity. |
+| `GET` | `/api/users` | `Central`, `National Head` | List active provisioned Pre-K users with decrypted plain-text passwords for administrator review. |
+| `GET` | `/api/users/deleted` | `Central`, `National Head` | List soft-deleted / trashed users with their original usernames, emails, roles, and released centres. |
+| `PUT` | `/api/users/:id` | `Central` | Update user details (name, email, phone, password/newPassword, role, zone, cluster, centres, status). Encrypts password, auto-unlocks account, and enforces 1-AOM allocation checks. |
+| `DELETE` | `/api/users/:id` | `Central` | Soft delete user account. Releases centre assignments so replacement staff can take over. |
+| `PUT` | `/api/users/:id/restore` | `Central` | Restore soft-deleted user account. Validates against active username/email conflicts and AOM centre conflicts. |
 | `PUT` | `/api/users/:id/unlock` | `Central` | Unlock an account locked by failed attempts. |
 | `PUT` | `/api/users/:id/reset-password` | `Central` | Administrator reset of a user's password. |
 | `PUT` | `/api/users/:id/status` | `Central` | Activate / deactivate user account. |
 
-### 6.2 Incident Reporting & Management
+### 6.2 Zone Master Management
+
+| Method | Endpoint | Access / Role | Description |
+|---|---|---|---|
+| `POST` | `/api/zones` | `Central` | Create an administrative zone (name, code, description, states). Enforces uppercase code and duplicate checks. |
+| `GET` | `/api/zones` | Authenticated | List all administrative zones enriched with dynamically aggregated centre count and active RSO details. Filterable by `search=` and `isActive=`. |
+| `GET` | `/api/zones/:id` | Authenticated | Get single zone details by ID, code, or name, including list of constituent centres and assigned RSO. |
+| `PUT` | `/api/zones/:id` | `Central` | Update zone details (name, code, description, states, isActive). Validates code and name uniqueness. |
+| `DELETE` | `/api/zones/:id` | `Central` | Soft delete zone. Blocks deletion if active centres are still attached to the zone. |
+
+### 6.3 Cluster Master Management (for Business Managers)
+
+| Method | Endpoint | Access / Role | Description |
+|---|---|---|---|
+| `POST` | `/api/clusters` | `Central` | Create an administrative cluster under a zone. Validates zone existence, code uniqueness, and name uniqueness. |
+| `GET` | `/api/clusters` | Authenticated | List all clusters enriched with assigned Business Manager (BM), total centre count, constituent centre list, and supervised AOMs list. Filterable by `zone=`, `search=`, and `unassigned=true`. |
+| `GET` | `/api/clusters/:id` | Authenticated | Get cluster details by ID, code, or name, including assigned BM, constituent centres, and all supervised AOMs. |
+| `GET` | `/api/clusters/:id/aoms` | Authenticated | Get all Area Operations Managers (AOMs) supervised by this cluster's BM, along with their assigned centres. |
+| `PUT` | `/api/clusters/:id` | `Central` | Update cluster details (name, code, zone, description, isActive). Cascades and syncs Centre and BM records if cluster name changes. |
+| `DELETE` | `/api/clusters/:id` | `Central` | Soft delete cluster. Blocks deletion if active centres are still attached to the cluster. |
+
+### 6.4 Centre / School Master Management
+
+| Method | Endpoint | Access / Role | Description |
+|---|---|---|---|
+| `POST` | `/api/centres` | `Central` | Create a Pre-K centre/school under a cluster, zone, and state. Validates parent zone/cluster and checks name/code uniqueness. |
+| `GET` | `/api/centres` | Authenticated | List centres filterable by `zone`, `state`, `cluster`, `search=`, and `unassigned=true`. Enriched with currently assigned active AOM. |
+| `GET` | `/api/centres/:id` | Authenticated | Get centre details with assigned AOM details and total incident count. |
+| `PUT` | `/api/centres/:id` | `Central` | Update centre details (name, code, zone, state, cluster, etc.). Automatically syncs active AOM centre assignments if name changes. |
+| `DELETE` | `/api/centres/:id` | `Central` | Soft delete centre. Automatically pulls centre from assigned AOM's allocation. |
+
+### 6.5 Incident Reporting, Reports & Management
 
 | Method | Endpoint | Access / Role | Description |
 |---|---|---|---|
 | `POST` | `/api/add-incident` | Authenticated | Report an incident. Enforces POCSO/Corporal Punishment as Critical, assigns SLA & owner, generates Case ID. |
-| `GET` | `/api/get-incidents` | Authenticated | Scoped case log with search (`search=`), status (`status=Open`), and pagination. Enforces horizontal peer isolation. |
+| `GET` | `/api/get-incidents` | Authenticated | Scoped case log with multi-attribute filtering (`zone`, `centreName`/`schoolName`, `state`, `severity`, `status`, `type`, `dateRange`) and keyword search. Enforces horizontal peer isolation. |
+| `GET` | `/api/incident-reports` | Authenticated | Scoped incident reports API returning incident list and aggregated summary breakdown (`open`, `inProgress`, `resolved`, `closed`, `critical`, `high`, `medium`, `low`). |
 | `PUT` | `/api/update-incident/:id` | Authenticated | Update incident details (blocks downgrade of POCSO & Corporal Punishment; blocks cross-centre edits). |
 | `PUT` | `/api/update-incident-status/:id` | Authenticated | Toggle status (`Open`/`Closed`). Enforces RBAC closure matrix and centre authorization. |
 | `DELETE` | `/api/delete-incident/:id` | `Central` | Delete incident record. |
 
-### 6.3 Dashboards & Reference Data
+### 6.6 Dashboards & Reference Data
 
 | Method | Endpoint | Access / Role | Description |
 |---|---|---|---|
 | `GET` | `/api/national-dashboard` | Authenticated | **National Dashboard (FR-3.1 - FR-3.5):** National metrics, 23-state tile map with rate bands, zone comparison, states to watch, and state drill-down (`?state=...`). |
 | `GET` | `/api/incident-stats` | Authenticated | **Zone Overview Dashboard (FR-4.1 - FR-4.6):** KPI cards, severity trends, severity-mix, region comparison, and Type × Region matrix. |
 | `GET` | `/api/escalation-matrix` | Public / All | **Standing Reference (FR-5.3):** Viewable escalation rules, SLAs, required actions, and default type severities. |
-| `GET` | `/api/audit-logs` | `Central` | Paginated audit trail of all security and case lifecycle events (FR-1.5). |
+| `GET` | `/api/audit-logs` | `Central` | Paginated audit trail of all security and case lifecycle events (FR-1.5) with full-text/keyword search (`search=`), date range filtering (`startDate=`, `endDate=`), action, and entity type filters. |
 
 ---
 
@@ -209,29 +284,40 @@ To permanently protect same-level data privacy:
 ```
 Prototype-Light-House-Backend/
 ├── Controllers/
-│   ├── Incident.Controller.js    # Incident capture, Case log, Dashboards, Audit logs
-│   └── User.Controller.js        # Auth, 5-attempt lockout, Pre-K user management & 1-AOM validation
+│   ├── Incident.Controller.js    # Incident capture, Case log, Multi-filter reports, Dashboards, Audit logs
+│   ├── User.Controller.js        # Auth, 5-attempt lockout, Pre-K user management, Soft delete & Restore
+│   ├── Zone.Controller.js        # Zone Master management with RSO enrichment & centre counts
+│   ├── Cluster.Controller.js     # Cluster Master management with BM enrichment & supervised AOMs
+│   └── Centre.Controller.js      # Centre/School Master management with dynamic AOM enrichment
 ├── Middleware/
 │   └── authMiddleware.js         # JWT verification, Pre-K role injection & in-memory caching
 ├── Models/
 │   ├── incident.js               # Case ID, SLA deadline, non-downgradable hooks, aggregation indexes
-│   ├── user.js                   # 5-tier Pre-K user model (AOM, BM, RSO, National Head, Central)
+│   ├── user.js                   # 5-tier Pre-K user model with soft delete & lifecycle management
+│   ├── zone.js                   # Zone Master schema (name, code, states, RSO reference)
+│   ├── cluster.js                # Cluster Master schema (name, code, zone, BM reference)
+│   ├── centre.js                 # Centre/School Master schema (name, code, zone, state, cluster)
 │   └── auditLog.js               # Security and operational audit trail schema
 ├── Routes/
 │   ├── auth.route.js             # Authentication routes (/auth/login, /auth/reset-password)
-│   ├── user.route.js             # User management routes (/api/users)
-│   └── incident.route.js         # Incident and Dashboard routes
+│   ├── user.route.js             # User management routes (/api/users, /api/users/deleted, restore)
+│   ├── incident.route.js         # Incident and Dashboard routes (/api/get-incidents, /api/incident-reports)
+│   ├── zone.route.js             # Zone Master routes (/api/zones)
+│   ├── cluster.route.js          # Cluster Master routes (/api/clusters)
+│   └── centre.route.js           # Centre/School Master routes (/api/centres)
 ├── Utils/
 │   ├── prekConstants.js          # Escalation matrix, 10 types, rate bands, 23-state baseline
-│   ├── auditLogger.js            # Non-blocking resilient audit logger
+│   ├── auditLogger.js            # Non-blocking resilient audit logger with multi-field search
 │   ├── roleResolver.js           # 5-tier query scoping & strict peer isolation
 │   ├── dashboardHelpers.js       # $facet pipelines, date parsing, explain plan parser
 │   └── crypto.js                 # AES-256-CBC encryption/decryption with default key fallbacks
 ├── tests/
 │   ├── incident-dashboard.test.js # Core dashboard & normalization unit tests
-│   └── prek-brd-v1.1.test.js     # BRD v1.1 compliance test suite & peer isolation tests
+│   └── prek-brd-v1.1.test.js     # BRD v1.1 compliance test suite, peer isolation, master data & lifecycle tests
+├── PREK_ROLE_HIERARCHY_AND_ACCESS_CONTROL_GUIDE.md # 5-Tier role hierarchy, jurisdiction & cURL guide
 ├── server.js                     # Express app setup, clean route mounting & socket init
 └── package.json                  # Dependencies & test scripts
+```
 ```
 
 ---
@@ -294,10 +380,16 @@ Run all tests:
 npm test
 ```
 
-**Total Tests:** **62 passing** across 17 suites (0 failures).
+**Total Tests:** **78 passing** across 22 suites (0 failures).
 - 5-Tier role normalization and query scoping.
 - Horizontal peer isolation (AOM 1 vs AOM 2) and upward hierarchy visibility.
 - 1-AOM-per-centre allocation conflict detection.
+- 1-BM-per-cluster exclusivity rule and dynamic AOM supervision.
+- Zone Master, Cluster Master & Centre / School Master schema validations and uppercase code normalization.
+- User soft delete: centre release, timestamp prefixing, and trashed user listing.
+- User restore: duplicate active username/email conflict detection, cluster conflict detection, and AOM centre conflict detection.
+- Dynamic personnel transition: automatic linking of incidents to incoming AOMs and role promotion scoping.
+- Multi-filter incident reports and breakdown summary calculations.
 - Non-downgradable rules for POCSO & Corporal Punishment.
 - Fixed escalation matrix and SLA calculation.
 - Role-enforced case closure matrix (FR-7.2).
@@ -305,3 +397,12 @@ npm test
 - National Dashboard rate band calculations and Top 5 "States to Watch".
 - 5-attempt account lockout policy and security audit trail.
 - 15-minute Access Token & 30-day Refresh Token lifecycles and expiration validation.
+
+---
+
+## 10. Architecture Guides & Reference Documents
+
+| Document | Description |
+|---|---|
+| [PREK_ROLE_HIERARCHY_AND_ACCESS_CONTROL_GUIDE.md](file:///d:/Pavan%20Raghuwanshi/HBG%20Projects/Light%20House%20Project/Prototype-Light-House-Backend/PREK_ROLE_HIERARCHY_AND_ACCESS_CONTROL_GUIDE.md) | **Comprehensive Role Hierarchy & Access Control Guide:** 5-tier role breakdown (`AOM`, `BM`, `RSO`, `National Head`, `Central`), ASCII hierarchy tree, jurisdiction scoping rules, peer isolation matrix, 1-AOM-per-centre allocation logic, case closure authority, clean cURL payloads for every role, and missing field troubleshooting. |
+| `Pre-K_Incident_Portal_BRD_v1.1.pdf` | **Business Requirement Document (BRD v1.1):** Official Pre-K specification for the national incident reporting system. |

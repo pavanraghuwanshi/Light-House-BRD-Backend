@@ -2,6 +2,9 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import User from "../Models/user.js";
 import Incident from "../Models/incident.js";
+import Zone from "../Models/zone.js";
+import Cluster from "../Models/cluster.js";
+import Centre from "../Models/centre.js";
 import AuditLog from "../Models/auditLog.js";
 import { encrypt } from "../Utils/crypto.js";
 import {
@@ -369,6 +372,66 @@ async function seed() {
       serverSelectionTimeoutMS: 15000,
     });
     console.log("Connected successfully to MongoDB.");
+
+    // 0. Seed Zone Master & Centre / School Master
+    console.log("\n--- Seeding Zone Master ---");
+    const dummyZones = [
+      { name: "North", code: "ZN-NORTH", description: "Northern Administrative Zone", states: ["Delhi", "Punjab", "Haryana", "Rajasthan", "Uttar Pradesh", "Himachal Pradesh", "Jammu and Kashmir", "Uttarakhand", "Chandigarh"] },
+      { name: "West", code: "ZN-WEST", description: "Western Administrative Zone", states: ["Maharashtra", "Goa", "Gujarat"] },
+      { name: "South", code: "ZN-SOUTH", description: "Southern Administrative Zone", states: ["Karnataka", "Tamil Nadu", "Telangana", "Andhra Pradesh", "Kerala"] },
+      { name: "East", code: "ZN-EAST", description: "Eastern Administrative Zone", states: ["West Bengal", "Odisha", "Bihar", "Jharkhand", "Assam"] },
+      { name: "Central", code: "ZN-CENTRAL", description: "Central Administrative Zone", states: ["Madhya Pradesh", "Chhattisgarh"] },
+    ];
+
+    for (const z of dummyZones) {
+      await Zone.findOneAndUpdate(
+        { name: z.name },
+        { ...z, isActive: true, isDeleted: false },
+        { upsert: true, new: true }
+      );
+      console.log(`Seeded Zone: ${z.name} (${z.code})`);
+    }
+
+    console.log("\n--- Seeding Cluster Master (for Business Managers) ---");
+    const dummyClusters = [
+      { name: "Mumbai Cluster", code: "CL-MUM", zone: "West", description: "Mumbai Metropolitan Area Cluster" },
+      { name: "Pune Cluster", code: "CL-PUN", zone: "West", description: "Pune Region Cluster" },
+      { name: "Delhi Cluster", code: "CL-DEL", zone: "North", description: "National Capital Region Cluster" },
+      { name: "Bengaluru Cluster", code: "CL-BLR", zone: "South", description: "Bengaluru Urban Cluster" },
+      { name: "Kolkata Cluster", code: "CL-KOL", zone: "East", description: "Kolkata Metropolitan Cluster" },
+    ];
+
+    for (const cl of dummyClusters) {
+      await Cluster.findOneAndUpdate(
+        { name: cl.name },
+        { ...cl, isActive: true, isDeleted: false },
+        { upsert: true, new: true }
+      );
+      console.log(`Seeded Cluster: ${cl.name} (${cl.code}) in Zone ${cl.zone}`);
+    }
+
+    console.log("\n--- Seeding Centre / School Master ---");
+    const dummyCentres = [
+      { name: "Bandra Centre", code: "C-BND-01", zone: "West", state: "Maharashtra", city: "Mumbai", cluster: "Mumbai Cluster" },
+      { name: "Andheri Centre", code: "C-AND-02", zone: "West", state: "Maharashtra", city: "Mumbai", cluster: "Mumbai Cluster" },
+      { name: "Juhu Centre", code: "C-JUH-03", zone: "West", state: "Maharashtra", city: "Mumbai", cluster: "Mumbai Cluster" },
+      { name: "Colaba Centre", code: "C-COL-04", zone: "West", state: "Maharashtra", city: "Mumbai", cluster: "Mumbai Cluster" },
+      { name: "Kothrud Centre", code: "C-KTH-05", zone: "West", state: "Maharashtra", city: "Pune", cluster: "Pune Cluster" },
+      { name: "Baner Centre", code: "C-BNR-06", zone: "West", state: "Maharashtra", city: "Pune", cluster: "Pune Cluster" },
+      { name: "Hinjewadi Centre", code: "C-HNW-07", zone: "West", state: "Maharashtra", city: "Pune", cluster: "Pune Cluster" },
+      { name: "Rohini Centre", code: "C-ROH-08", zone: "North", state: "Delhi", city: "New Delhi", cluster: "Delhi Cluster" },
+      { name: "Dwarka Centre", code: "C-DWK-09", zone: "North", state: "Delhi", city: "New Delhi", cluster: "Delhi Cluster" },
+      { name: "Saket Centre", code: "C-SKT-10", zone: "North", state: "Delhi", city: "New Delhi", cluster: "Delhi Cluster" },
+    ];
+
+    for (const c of dummyCentres) {
+      await Centre.findOneAndUpdate(
+        { name: c.name },
+        { ...c, isActive: true, isDeleted: false },
+        { upsert: true, new: true }
+      );
+      console.log(`Seeded Centre: ${c.name} (${c.code}) in ${c.zone} - ${c.state}`);
+    }
 
     // 1. Seed Users
     console.log("\n--- Seeding Pre-K Users Across Every Role ---");

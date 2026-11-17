@@ -8,6 +8,9 @@ import { dbConnections } from "./Database/db.js";
 import authRoute from "./Routes/auth.route.js";
 import userRoute from "./Routes/user.route.js";
 import incidentRoute from "./Routes/incident.route.js";
+import zoneRoute from "./Routes/zone.route.js";
+import clusterRoute from "./Routes/cluster.route.js";
+import centreRoute from "./Routes/centre.route.js";
 import { setupSocket } from "./Utils/socket/socket.js";
 
 dotenv.config();
@@ -37,6 +40,9 @@ app.get("/", (req, res) => {
 app.use("/auth", authRoute);
 app.use("/api", userRoute);
 app.use("/api", incidentRoute);
+app.use("/api", zoneRoute);
+app.use("/api", clusterRoute);
+app.use("/api", centreRoute);
 
 // WebSocket Setup
 setupSocket(server);

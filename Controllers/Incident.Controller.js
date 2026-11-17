@@ -158,11 +158,45 @@ export const addIncident = async (req, res) => {
 };
 
 /**
- * FR-7.1, FR-7.3: Case Log with Search, Filter & Role Scoping
+ * FR-7.1, FR-7.3: Comprehensive Incident Reporting & Case Log
+ * Supports rich multi-attribute filtering across the entire organizational hierarchy:
+ * - Zone / Region (e.g. North, West, South, East, Central)
+ * - Centre / School (e.g. Centre Bandra, Delhi Model School)
+ * - State (e.g. Maharashtra, Karnataka, Delhi)
+ * - Cluster (e.g. Mumbai Cluster)
+ * - Severity (Low, Medium, High, Critical)
+ * - Incident Type / Category (POCSO, Corporal Punishment, Accident, etc.)
+ * - Status (Open, In Progress, Resolved, Closed)
+ * - Date Range (startDate & endDate)
+ * - Multi-field full-text search (search= or q=)
+ * - Aggregated summary metrics (when includeStats=true or via /api/incident-reports)
  */
 export const getIncidents = async (req, res) => {
   try {
-    let { page = 1, limit = 10, search = "", status = "", zone = "", region = "" } = req.query;
+    let {
+      page = 1,
+      limit = 10,
+      search = "",
+      q = "",
+      status = "",
+      zone = "",
+      region = "",
+      centre = "",
+      centreName = "",
+      school = "",
+      schoolName = "",
+      state = "",
+      cluster = "",
+      severity = "",
+      incidentType = "",
+      type = "",
+      subCategory = "",
+      category = "",
+      startDate = "",
+      endDate = "",
+      includeStats = false,
+      summary = false,
+    } = req.query;
 
     page = Math.max(1, parseInt(page) || 1);
     if (limit === "all" || limit === "All" || limit === 0 || limit === "0") {
@@ -180,6 +214,7 @@ export const getIncidents = async (req, res) => {
       andConditions.push(roleFilter);
     }
 
+    // Status Filter
     if (status && status.toLowerCase() !== "all") {
       if (status === "In-Progress" || status === "In Progress") {
         andConditions.push({ status: { $in: ["In-Progress", "In Progress"] } });
@@ -188,6 +223,7 @@ export const getIncidents = async (req, res) => {
       }
     }
 
+    // Zone / Region Filter
     const targetZone = zone || region;
     if (targetZone && targetZone.toLowerCase() !== "all") {
       andConditions.push({
@@ -198,19 +234,77 @@ export const getIncidents = async (req, res) => {
       });
     }
 
-    // FR-7.1: Multi-field search (isolated from role boundary conditions)
-    if (search) {
-      const searchRegex = { $regex: search, $options: "i" };
+    // Centre / School Filter
+    const targetCentre = centreName || centre || schoolName || school;
+    if (targetCentre && targetCentre.toLowerCase() !== "all") {
+      andConditions.push({
+        $or: [
+          { centreName: { $regex: "^" + targetCentre + "$", $options: "i" } },
+          { schoolName: { $regex: "^" + targetCentre + "$", $options: "i" } },
+        ],
+      });
+    }
+
+    // State Filter
+    if (state && state.toLowerCase() !== "all") {
+      andConditions.push({ state: { $regex: "^" + state + "$", $options: "i" } });
+    }
+
+    // Cluster Filter
+    if (cluster && cluster.toLowerCase() !== "all") {
+      andConditions.push({ cluster: { $regex: "^" + cluster + "$", $options: "i" } });
+    }
+
+    // Severity Filter
+    if (severity && severity.toLowerCase() !== "all") {
+      const normSev = normalizeSeverity(severity);
+      if (normSev !== "unknown") {
+        andConditions.push({ severity: normSev });
+      } else {
+        andConditions.push({ severity: { $regex: "^" + severity + "$", $options: "i" } });
+      }
+    }
+
+    // Incident Type / Category Filter
+    const targetType = incidentType || type || subCategory;
+    if (targetType && targetType.toLowerCase() !== "all") {
+      andConditions.push({
+        $or: [
+          { incidentType: { $regex: "^" + targetType + "$", $options: "i" } },
+          { subCategory: { $regex: "^" + targetType + "$", $options: "i" } },
+        ],
+      });
+    }
+
+    if (category && category.toLowerCase() !== "all") {
+      andConditions.push({ category: { $regex: "^" + category + "$", $options: "i" } });
+    }
+
+    // Date Range Filtering
+    if (startDate || endDate) {
+      const dateRange = parseDashboardDateRange(startDate, endDate);
+      if (dateRange.startDate || dateRange.endDate) {
+        andConditions.push(buildEffectiveDateFilter(dateRange.startDate, dateRange.endDate));
+      }
+    }
+
+    // Multi-field Search
+    const term = (search || q || "").trim();
+    if (term) {
+      const searchRegex = { $regex: term, $options: "i" };
       andConditions.push({
         $or: [
           { caseId: searchRegex },
           { description: searchRegex },
           { briefDescription: searchRegex },
           { incidentType: searchRegex },
+          { subCategory: searchRegex },
           { reporterName: searchRegex },
           { reportedBy: searchRegex },
           { centreName: searchRegex },
+          { schoolName: searchRegex },
           { state: searchRegex },
+          { zone: searchRegex },
         ],
       });
     }
@@ -222,22 +316,87 @@ export const getIncidents = async (req, res) => {
         ? andConditions[0]
         : { $and: andConditions };
 
-    const [incidents, total] = await Promise.all([
+    const shouldIncludeStats =
+      includeStats === "true" ||
+      includeStats === true ||
+      summary === "true" ||
+      summary === true;
+
+    const [incidents, total, stats] = await Promise.all([
       Incident.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       Incident.countDocuments(filter),
+      shouldIncludeStats
+        ? Incident.aggregate([
+            { $match: filter },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                open: {
+                  $sum: { $cond: [{ $eq: ["$status", "Open"] }, 1, 0] },
+                },
+                inProgress: {
+                  $sum: {
+                    $cond: [
+                      { $in: ["$status", ["In Progress", "In-Progress"]] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                resolved: {
+                  $sum: { $cond: [{ $eq: ["$status", "Resolved"] }, 1, 0] },
+                },
+                closed: {
+                  $sum: { $cond: [{ $eq: ["$status", "Closed"] }, 1, 0] },
+                },
+                critical: {
+                  $sum: { $cond: [{ $eq: ["$severity", "Critical"] }, 1, 0] },
+                },
+                high: {
+                  $sum: { $cond: [{ $eq: ["$severity", "High"] }, 1, 0] },
+                },
+                medium: {
+                  $sum: { $cond: [{ $eq: ["$severity", "Medium"] }, 1, 0] },
+                },
+                low: {
+                  $sum: { $cond: [{ $eq: ["$severity", "Low"] }, 1, 0] },
+                },
+              },
+            },
+          ])
+        : Promise.resolve([]),
     ]);
 
-    return res.status(200).json({
+    const response = {
       success: true,
       total,
       page,
       limit,
       data: incidents,
-    });
+    };
+
+    if (shouldIncludeStats) {
+      const summaryStats = stats[0] || {
+        total: 0,
+        open: 0,
+        inProgress: 0,
+        resolved: 0,
+        closed: 0,
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      };
+      delete summaryStats._id;
+      response.summary = summaryStats;
+    }
+
+    return res.status(200).json(response);
   } catch (err) {
     console.error("GET INCIDENTS ERROR:", err);
     return res.status(400).json({
@@ -245,6 +404,15 @@ export const getIncidents = async (req, res) => {
       message: err.message,
     });
   }
+};
+
+/**
+ * Incident Reports Endpoint
+ * Returns scoped incident data with aggregated summary metrics.
+ */
+export const getIncidentReports = async (req, res) => {
+  req.query.includeStats = "true";
+  return getIncidents(req, res);
 };
 
 /**

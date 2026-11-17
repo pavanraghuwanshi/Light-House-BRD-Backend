@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    phone: {
+      type: String,
+      trim: true,
+    },
     password: {
       type: String,
       required: true,
@@ -96,6 +100,35 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Soft Delete & Personnel Lifecycle Management
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    originalUsername: {
+      type: String,
+      trim: true,
+    },
+    originalEmail: {
+      type: String,
+      trim: true,
+    },
+    previousCentres: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
   },
   {
     timestamps: true,

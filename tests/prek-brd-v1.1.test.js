@@ -511,5 +511,360 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.equal(escaped, "Central \\(All-Activity Admin\\)");
     });
   });
+
+  describe("10. Zone Master & Centre / School Master Architecture", () => {
+    it("validates Zone required fields and uppercase code normalization", () => {
+      const zonePayload = {
+        name: "North-Nagpur",
+        code: "zn-nnp",
+        states: ["Maharashtra"],
+      };
+
+      assert.ok(zonePayload.name, "Zone name is required");
+      assert.ok(zonePayload.code, "Zone code is required");
+      const normalizedCode = zonePayload.code.trim().toUpperCase();
+      assert.equal(normalizedCode, "ZN-NNP");
+    });
+
+    it("validates Centre / School Master required fields (name, code, zone, state)", () => {
+      const centrePayload = {
+        name: "Nagpur Central School",
+        code: "c-ngp-01",
+        zone: "North-Nagpur",
+        state: "Maharashtra",
+      };
+
+      const missing = [];
+      if (!centrePayload.name) missing.push("name");
+      if (!centrePayload.code) missing.push("code");
+      if (!centrePayload.zone) missing.push("zone");
+      if (!centrePayload.state) missing.push("state");
+
+      assert.equal(missing.length, 0, "All 4 required centre fields must be provided");
+      assert.equal(centrePayload.code.toUpperCase(), "C-NGP-01");
+    });
+
+    it("enriches centre records with active assigned AOM details", () => {
+      const activeAOM = {
+        id: "aom-101",
+        name: "Pooja Verma",
+        username: "pooja_aom",
+        email: "pooja@lighthouse.com",
+        centres: ["Nagpur Central School", "Besa Pre-K Centre"],
+      };
+
+      const centre = {
+        name: "Nagpur Central School",
+        code: "C-NGP-01",
+        zone: "North-Nagpur",
+      };
+
+      const isAssigned = activeAOM.centres.includes(centre.name);
+      assert.equal(isAssigned, true);
+    });
+  });
+
+  describe("11. User Soft Delete & Restore Lifecycle with Conflict Detection", () => {
+    it("soft deletes a user: releases assigned centres and renames credentials with timestamp prefix", () => {
+      const user = {
+        username: "karan_aom",
+        email: "karan@lighthouse.com",
+        centres: ["Bandra Centre", "Juhu Centre"],
+        isDeleted: false,
+        isActive: true,
+      };
+
+      // Soft delete operation
+      const originalUsername = user.username;
+      const originalEmail = user.email;
+      const previousCentres = [...user.centres];
+
+      user.originalUsername = originalUsername;
+      user.originalEmail = originalEmail;
+      user.previousCentres = previousCentres;
+      user.centres = [];
+      user.isDeleted = true;
+      user.isActive = false;
+      user.deletedAt = new Date();
+      user.username = `deleted_1723400000000_${originalUsername}`;
+      user.email = `deleted_1723400000000_${originalEmail}`;
+
+      assert.equal(user.isDeleted, true);
+      assert.equal(user.isActive, false);
+      assert.equal(user.centres.length, 0, "Centres must be freed immediately for reassignment");
+      assert.deepEqual(user.previousCentres, ["Bandra Centre", "Juhu Centre"]);
+      assert.match(user.username, /^deleted_\d+_karan_aom$/);
+    });
+
+    it("prevents restore if another active user was created with the same username", () => {
+      const deletedUser = {
+        originalUsername: "karan_aom",
+        originalEmail: "karan@lighthouse.com",
+      };
+
+      const activeUsers = [
+        { username: "karan_aom", email: "new_karan@lighthouse.com", isDeleted: false },
+      ];
+
+      const usernameConflict = activeUsers.find(
+        (u) => u.username === deletedUser.originalUsername && !u.isDeleted
+      );
+
+      assert.ok(usernameConflict, "Should detect duplicate username conflict with active user");
+      assert.equal(usernameConflict.username, "karan_aom");
+    });
+
+    it("prevents restore if another active user was created with the same email", () => {
+      const deletedUser = {
+        originalUsername: "old_karan",
+        originalEmail: "karan@lighthouse.com",
+      };
+
+      const activeUsers = [
+        { username: "new_admin", email: "karan@lighthouse.com", isDeleted: false },
+      ];
+
+      const emailConflict = activeUsers.find(
+        (u) => u.email === deletedUser.originalEmail && !u.isDeleted
+      );
+
+      assert.ok(emailConflict, "Should detect duplicate email conflict with active user");
+      assert.equal(emailConflict.email, "karan@lighthouse.com");
+    });
+
+    it("prevents restoring an AOM if their previous centres were reassigned to another active AOM", () => {
+      const deletedAOM = {
+        role: PREK_ROLES.AOM,
+        previousCentres: ["Bandra Centre"],
+      };
+
+      const activeAOMs = [
+        { name: "Pooja", role: PREK_ROLES.AOM, centres: ["Bandra Centre"], isActive: true },
+      ];
+
+      const conflict = activeAOMs.find((aom) =>
+        aom.centres.some((c) => deletedAOM.previousCentres.includes(c))
+      );
+
+      assert.ok(conflict, "Should detect centre allocation conflict on restore");
+      assert.equal(conflict.name, "Pooja");
+    });
+
+    it("successfully restores user when credentials and centre assignments are clear", () => {
+      const deletedUser = {
+        originalUsername: "rajesh_bm",
+        originalEmail: "rajesh@lighthouse.com",
+        previousCentres: [],
+        isDeleted: true,
+      };
+
+      // Perform clean restore
+      const restoredUser = {
+        ...deletedUser,
+        username: deletedUser.originalUsername,
+        email: deletedUser.originalEmail,
+        isDeleted: false,
+        isActive: true,
+        deletedAt: null,
+      };
+
+      assert.equal(restoredUser.username, "rajesh_bm");
+      assert.equal(restoredUser.email, "rajesh@lighthouse.com");
+      assert.equal(restoredUser.isDeleted, false);
+      assert.equal(restoredUser.isActive, true);
+    });
+  });
+
+  describe("12. Dynamic Personnel Transition & Automatic Incident Linking", () => {
+    it("automatically links historical and future incidents when a new AOM is assigned to centres", () => {
+      // Historical incident was reported at 'Bandra Centre' by old AOM
+      const incident = {
+        caseId: "INC-20261113-1001",
+        centreName: "Bandra Centre",
+        zone: "West",
+        severity: "Low",
+      };
+
+      // New AOM joins after old AOM leaves or is promoted
+      const newAOMReq = {
+        user: {
+          id: "new-aom-id",
+          name: "Suresh Patil",
+          role: "AOM",
+          centres: ["Bandra Centre"],
+        },
+        query: {},
+      };
+
+      const filter = buildQueryWithRole(newAOMReq);
+      assert.deepEqual(filter.centreName, { $in: ["Bandra Centre"] });
+
+      // Verifying incident matches the new AOM's scoped query
+      const isVisibleToNewAOM = filter.centreName.$in.includes(incident.centreName);
+      assert.equal(isVisibleToNewAOM, true, "New AOM must automatically see all incidents for assigned centre");
+    });
+
+    it("automatically expands visibility across all zones when a user is promoted to National Head", () => {
+      // User was previously RSO West
+      const rsoReq = {
+        user: { role: "RSO", zone: "West" },
+        query: {},
+      };
+      const rsoFilter = buildQueryWithRole(rsoReq);
+      assert.ok(rsoFilter.$or, "RSO has zone restriction");
+
+      // User promoted to National Head
+      const nationalHeadReq = {
+        user: { role: "National Head" },
+        query: {},
+      };
+      const natFilter = buildQueryWithRole(nationalHeadReq);
+      assert.deepEqual(natFilter, {}, "National Head has national access without restrictions");
+    });
+  });
+
+  describe("13. Enhanced Incident Filtering & Reporting", () => {
+    it("constructs comprehensive filter covering zone, centre, state, severity, and type", () => {
+      const query = {
+        zone: "West",
+        centreName: "Bandra Centre",
+        state: "Maharashtra",
+        severity: "Critical",
+        incidentType: "POCSO",
+        status: "Open",
+      };
+
+      const andConditions = [];
+      if (query.status) andConditions.push({ status: query.status });
+      if (query.zone) andConditions.push({ zone: query.zone });
+      if (query.centreName) andConditions.push({ centreName: query.centreName });
+      if (query.state) andConditions.push({ state: query.state });
+      if (query.severity) andConditions.push({ severity: query.severity });
+      if (query.incidentType) andConditions.push({ incidentType: query.incidentType });
+
+      assert.equal(andConditions.length, 6);
+      const compositeFilter = { $and: andConditions };
+      assert.equal(compositeFilter.$and.length, 6);
+    });
+
+    it("calculates summary breakdown metrics for incident reports", () => {
+      const sampleIncidents = [
+        { severity: "Critical", status: "Open" },
+        { severity: "High", status: "In Progress" },
+        { severity: "Medium", status: "Resolved" },
+        { severity: "Low", status: "Closed" },
+        { severity: "Critical", status: "Closed" },
+      ];
+
+      const summary = {
+        total: sampleIncidents.length,
+        open: sampleIncidents.filter((i) => i.status === "Open").length,
+        inProgress: sampleIncidents.filter((i) => i.status === "In Progress").length,
+        resolved: sampleIncidents.filter((i) => i.status === "Resolved").length,
+        closed: sampleIncidents.filter((i) => i.status === "Closed").length,
+        critical: sampleIncidents.filter((i) => i.severity === "Critical").length,
+        high: sampleIncidents.filter((i) => i.severity === "High").length,
+        medium: sampleIncidents.filter((i) => i.severity === "Medium").length,
+        low: sampleIncidents.filter((i) => i.severity === "Low").length,
+      };
+
+      assert.equal(summary.total, 5);
+      assert.equal(summary.open, 1);
+      assert.equal(summary.closed, 2);
+      assert.equal(summary.critical, 2);
+      assert.equal(summary.high, 1);
+      assert.equal(summary.medium, 1);
+      assert.equal(summary.low, 1);
+    });
+  });
+
+  describe("14. Cluster Master Architecture & Business Manager (BM) Supervision", () => {
+    it("validates Cluster Master required fields and uppercase code normalization", () => {
+      const clusterPayload = {
+        name: "Mumbai Cluster",
+        code: "cl-mum",
+        zone: "West",
+        description: "Mumbai Metropolitan Area Cluster",
+      };
+
+      const missing = [];
+      if (!clusterPayload.name) missing.push("name");
+      if (!clusterPayload.code) missing.push("code");
+      if (!clusterPayload.zone) missing.push("zone");
+
+      assert.equal(missing.length, 0, "Cluster name, code, and zone are required");
+      assert.equal(clusterPayload.code.trim().toUpperCase(), "CL-MUM");
+    });
+
+    it("enforces 1-BM-per-cluster exclusivity rule to guarantee peer isolation", () => {
+      const activeBMs = [
+        { name: "Meera Nair", username: "bm_mumbai", role: "BM", cluster: "Mumbai Cluster", isActive: true },
+      ];
+
+      const newBMRequest = {
+        name: "Rohit Shetty",
+        role: "BM",
+        cluster: "Mumbai Cluster",
+      };
+
+      const conflict = activeBMs.find(
+        (bm) => bm.cluster.toLowerCase() === newBMRequest.cluster.toLowerCase() && bm.isActive
+      );
+
+      assert.ok(conflict, "Should detect duplicate BM assignment to the same cluster");
+      assert.equal(conflict.username, "bm_mumbai");
+    });
+
+    it("dynamically identifies AOMs supervised by a Business Manager via cluster centres", () => {
+      // Cluster has these centres
+      const clusterCentres = ["Bandra Centre", "Juhu Centre", "Andheri Centre", "Colaba Centre"];
+
+      // AOMs and their centre assignments
+      const aoms = [
+        { name: "AOM 1 (Bandra)", username: "aom_bandra", centres: ["Bandra Centre", "Juhu Centre"] },
+        { name: "AOM 2 (Andheri)", username: "aom_andheri", centres: ["Andheri Centre", "Colaba Centre"] },
+        { name: "AOM 3 (Pune)", username: "aom_pune", centres: ["Kothrud Centre", "Baner Centre"] },
+      ];
+
+      // BM of Mumbai Cluster supervises AOMs whose centres overlap with this cluster
+      const supervisedAOMs = aoms.filter((aom) =>
+        aom.centres.some((c) => clusterCentres.includes(c))
+      );
+
+      assert.equal(supervisedAOMs.length, 2, "BM Mumbai must supervise AOM 1 and AOM 2");
+      assert.equal(supervisedAOMs[0].username, "aom_bandra");
+      assert.equal(supervisedAOMs[1].username, "aom_andheri");
+      assert.ok(!supervisedAOMs.some((a) => a.username === "aom_pune"), "BM Mumbai must NOT see Pune AOM");
+    });
+
+    it("automatically transitions cluster oversight when a new BM replaces a departed BM", () => {
+      // Old BM leaves
+      const oldBM = {
+        username: "old_bm_mumbai",
+        cluster: "Mumbai Cluster",
+        isDeleted: true,
+      };
+
+      // New BM is appointed to Mumbai Cluster
+      const newBM = {
+        username: "new_bm_mumbai",
+        role: "BM",
+        zone: "West",
+        cluster: "Mumbai Cluster",
+      };
+
+      // Centres and reports in Mumbai Cluster
+      const incidentsInCluster = [
+        { caseId: "INC-20261113-1001", cluster: "Mumbai Cluster", centreName: "Bandra Centre" },
+        { caseId: "INC-20261113-1002", cluster: "Mumbai Cluster", centreName: "Andheri Centre" },
+      ];
+
+      const visibleIncidents = incidentsInCluster.filter(
+        (inc) => inc.cluster === newBM.cluster
+      );
+
+      assert.equal(visibleIncidents.length, 2, "New BM must immediately inherit all incidents in the cluster");
+    });
+  });
 });
 

@@ -62,6 +62,14 @@ export const loginUser = async (req, res) => {
       }
     }
 
+    // Soft-deleted check
+    if (user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been deactivated or removed. Please contact your system administrator.",
+      });
+    }
+
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -364,7 +372,12 @@ export const logoutUser = async (req, res) => {
 };
 
 /**
- * FR-1.4: Central Administrator Account Creation
+ * FR-1.4: Pre-K User Provisioning (Central Admin Only)
+ * Pure BRD v1.1 Scalable Architecture:
+ * - 5 Roles: AOM, BM, RSO, National Head, Central
+ * - Explicit field validation with exact missing field feedback
+ * - Role-scoped hierarchy validation (Zone for RSO/BM/AOM, Cluster for BM, Centres for AOM)
+ * - Strict 1-AOM-per-centre allocation conflict check (FR-1.3)
  */
 export const createUser = async (req, res) => {
   try {
@@ -376,42 +389,76 @@ export const createUser = async (req, res) => {
       });
     }
 
-    const { name, username, email, password, role, zone, cluster, centres } = req.body;
+    const {
+      name,
+      username,
+      email,
+      phone,
+      mobileNo,
+      password,
+      role,
+      zone,
+      cluster,
+      centres,
+    } = req.body;
 
-    if (!name || !username || !email || !password || !role) {
+    // 1. Explicit Missing Field Validation
+    const missingFields = [];
+    if (!name || typeof name !== "string" || !name.trim()) missingFields.push("name");
+    if (!username || typeof username !== "string" || !username.trim()) missingFields.push("username");
+    if (!email || typeof email !== "string" || !email.trim()) missingFields.push("email");
+    const contactNumber = phone !== undefined && phone !== null ? phone : mobileNo;
+    if (contactNumber === undefined || contactNumber === null || !String(contactNumber).trim()) {
+      missingFields.push("phone");
+    }
+    if (!password || typeof password !== "string" || !password.trim()) missingFields.push("password");
+    if (!role || typeof role !== "string" || !role.trim()) missingFields.push("role");
+
+    if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: "name, username, email, password, and role are required.",
+        message: `Missing required field${missingFields.length > 1 ? "s" : ""}: ${missingFields.join(", ")}.`,
+        missingFields,
       });
     }
 
+    // 2. Canonical Pre-K Role Normalization & Validation
     const normalizedRole = normalizePrekRole(role);
     if (!normalizedRole) {
       return res.status(400).json({
         success: false,
-        message: `Invalid role: ${role}. Allowed roles: AOM, BM, RSO, National Head, Central.`,
+        message: `Invalid role: '${role}'. Allowed Pre-K roles are: AOM, BM, RSO, National Head, Central.`,
       });
     }
 
-    const existingUser = await User.findOne({
-      $or: [{ username: username.toLowerCase().trim() }, { email: email.toLowerCase().trim() }],
-    });
+    // 3. BRD v1.1 Hierarchy Scoping Validations
+    const cleanZone = zone && typeof zone === "string" ? zone.trim() : "";
+    const cleanCluster = cluster && typeof cluster === "string" ? cluster.trim() : "";
+    const assignedCentres = Array.isArray(centres)
+      ? centres.map((c) => String(c).trim()).filter(Boolean)
+      : centres && typeof centres === "string" && centres.trim()
+      ? [centres.trim()]
+      : [];
 
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "Username or email is already registered.",
-      });
-    }
+    if (normalizedRole === PREK_ROLES.AOM) {
+      if (!cleanZone) {
+        return res.status(400).json({
+          success: false,
+          message: "Zone is required for AOM role (e.g. West, North, South, East, Central).",
+        });
+      }
+      if (assignedCentres.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Centres are required for AOM role (must assign at least 1 pre-K centre).",
+        });
+      }
 
-    const assignedCentres = Array.isArray(centres) ? centres : centres ? [centres] : [];
-
-    // BRD Section 5 & FR-1.3: 1-AOM-per-centre allocation rule
-    // Prevent assigning the same centre to multiple AOMs to guarantee strict peer isolation
-    if (normalizedRole === PREK_ROLES.AOM && assignedCentres.length > 0) {
+      // 1-AOM-per-centre mutual exclusivity rule (FR-1.3)
       const conflictingUsers = await User.find({
         role: PREK_ROLES.AOM,
         isActive: true,
+        isDeleted: { $ne: true },
         centres: { $in: assignedCentres },
       }).select("name username centres");
 
@@ -427,16 +474,79 @@ export const createUser = async (req, res) => {
           conflicts,
         });
       }
+    } else if (normalizedRole === PREK_ROLES.BM) {
+      if (!cleanZone) {
+        return res.status(400).json({
+          success: false,
+          message: "Zone is required for BM role (e.g. West, North, South, East, Central).",
+        });
+      }
+      if (!cleanCluster) {
+        return res.status(400).json({
+          success: false,
+          message: "Cluster is required for BM role (e.g. Mumbai Cluster, Pune Cluster, Delhi Cluster).",
+        });
+      }
+
+      // 1-BM-per-cluster exclusivity rule: Ensure only one active BM manages each cluster
+      const conflictingBM = await User.findOne({
+        role: PREK_ROLES.BM,
+        cluster: { $regex: `^${cleanCluster}$`, $options: "i" },
+        isActive: true,
+        isDeleted: { $ne: true },
+      }).select("name username cluster");
+
+      if (conflictingBM) {
+        return res.status(400).json({
+          success: false,
+          message: `Cluster allocation conflict: A single cluster cannot have multiple Business Managers. Cluster '${cleanCluster}' is already managed by ${conflictingBM.name} (@${conflictingBM.username}).`,
+          conflictingBM: {
+            id: conflictingBM._id,
+            name: conflictingBM.name,
+            username: conflictingBM.username,
+            cluster: conflictingBM.cluster,
+          },
+        });
+      }
+    } else if (normalizedRole === PREK_ROLES.RSO) {
+      if (!cleanZone) {
+        return res.status(400).json({
+          success: false,
+          message: "Zone is required for RSO role (e.g. West, North, South, East, Central).",
+        });
+      }
     }
 
+    // 4. Duplicate Username and Email Checks with Specific Error Feedback (active accounts)
+    const cleanUsername = username.toLowerCase().trim();
+    const cleanEmail = email.toLowerCase().trim();
+
+    const existingUsername = await User.findOne({ username: cleanUsername, isDeleted: { $ne: true } });
+    if (existingUsername) {
+      return res.status(400).json({
+        success: false,
+        message: `Username '@${cleanUsername}' is already taken. Please choose a different username.`,
+      });
+    }
+
+    const existingEmail = await User.findOne({ email: cleanEmail, isDeleted: { $ne: true } });
+    if (existingEmail) {
+      return res.status(400).json({
+        success: false,
+        message: `Email '${cleanEmail}' is already registered. Please use a different email address.`,
+      });
+    }
+
+    // 5. Create New User Document
     const newUser = new User({
       name: name.trim(),
-      username: username.toLowerCase().trim(),
-      email: email.toLowerCase().trim(),
+      username: cleanUsername,
+      email: cleanEmail,
+      phone: String(contactNumber).trim(),
       password: encrypt(password.trim()),
       role: normalizedRole,
-      zone: zone ? zone.trim() : undefined,
-      cluster: cluster ? cluster.trim() : undefined,
+      zone: cleanZone || undefined,
+      cluster: cleanCluster || undefined,
       centres: assignedCentres,
       isActive: true,
     });
@@ -452,6 +562,7 @@ export const createUser = async (req, res) => {
         createdUsername: newUser.username,
         createdRole: newUser.role,
         zone: newUser.zone,
+        cluster: newUser.cluster,
       },
     });
 
@@ -463,11 +574,13 @@ export const createUser = async (req, res) => {
         name: newUser.name,
         username: newUser.username,
         email: newUser.email,
+        phone: newUser.phone || "",
         role: newUser.role,
-        zone: newUser.zone,
-        cluster: newUser.cluster,
-        centres: newUser.centres,
+        zone: newUser.zone || "",
+        cluster: newUser.cluster || "",
+        centres: newUser.centres || [],
         isActive: newUser.isActive,
+        password: password.trim(),
       },
     });
   } catch (err) {
@@ -481,21 +594,33 @@ export const createUser = async (req, res) => {
 export const getUsers = async (req, res) => {
   try {
     const requesterRole = normalizePrekRole(req.user?.role);
-    if (
-      requesterRole !== PREK_ROLES.CENTRAL &&
-      requesterRole !== PREK_ROLES.NATIONAL_HEAD &&
-      req.user?.role !== "superAdmin"
-    ) {
+    const isCentralOrNational =
+      requesterRole === PREK_ROLES.CENTRAL ||
+      requesterRole === PREK_ROLES.NATIONAL_HEAD ||
+      req.user?.role === "superAdmin";
+    const isBM = requesterRole === PREK_ROLES.BM;
+
+    if (!isCentralOrNational && !isBM) {
       return res.status(403).json({
         success: false,
-        message: "Access denied. Only Central and National Head can list users.",
+        message: "Access denied. Only Central, National Head, and Business Managers can list staff.",
       });
     }
 
-    const { role, zone, search } = req.query;
-    const filter = {};
+    const { role, zone, cluster: queryCluster, search, includeDeleted } = req.query;
+    const filter = includeDeleted === "true" || includeDeleted === true ? {} : { isDeleted: { $ne: true } };
 
-    if (role) filter.role = normalizePrekRole(role) || role;
+    if (isBM) {
+      // Business Manager is scoped to view the AOMs under their assigned cluster
+      filter.role = PREK_ROLES.AOM;
+      if (req.user?.cluster) {
+        filter.cluster = req.user.cluster;
+      }
+    } else {
+      if (role) filter.role = normalizePrekRole(role) || role;
+      if (queryCluster) filter.cluster = { $regex: `^${queryCluster}$`, $options: "i" };
+    }
+
     if (zone) filter.zone = { $regex: `^${zone}$`, $options: "i" };
     if (search) {
       filter.$or = [
@@ -510,16 +635,21 @@ export const getUsers = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // Include plain-text decrypted password for administrative user review
-    const usersWithPlainPassword = users.map((u) => ({
-      ...u,
-      password: u.password ? decrypt(u.password) : "",
-    }));
+    // Include plain-text decrypted password for administrative user review (Central/National only)
+    const usersFormatted = users.map((u) => {
+      const copy = { ...u };
+      if (isCentralOrNational) {
+        copy.password = u.password ? decrypt(u.password) : "";
+      } else {
+        delete copy.password;
+      }
+      return copy;
+    });
 
     return res.status(200).json({
       success: true,
-      total: usersWithPlainPassword.length,
-      data: usersWithPlainPassword,
+      total: usersFormatted.length,
+      data: usersFormatted,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -540,7 +670,19 @@ export const updateUser = async (req, res) => {
     }
 
     const { id } = req.params;
-    const { name, email, password, newPassword, role, zone, cluster, centres, isActive } = req.body;
+    const {
+      name,
+      email,
+      phone,
+      mobileNo,
+      password,
+      newPassword,
+      role,
+      zone,
+      cluster,
+      centres,
+      isActive,
+    } = req.body;
 
     const user = await User.findById(id);
     if (!user) {
@@ -548,7 +690,9 @@ export const updateUser = async (req, res) => {
     }
 
     const targetRole = role ? (normalizePrekRole(role) || role) : user.role;
-    const targetCentres = centres !== undefined ? (Array.isArray(centres) ? centres : [centres]) : user.centres;
+    const targetCentres = centres !== undefined
+      ? (Array.isArray(centres) ? centres.map((c) => String(c).trim()).filter(Boolean) : [String(centres).trim()])
+      : user.centres;
 
     // BRD Section 5 & FR-1.3: 1-AOM-per-centre allocation rule
     // Prevent assigning the same centre to multiple AOMs to guarantee strict peer isolation
@@ -557,6 +701,7 @@ export const updateUser = async (req, res) => {
         role: PREK_ROLES.AOM,
         _id: { $ne: user._id },
         isActive: true,
+        isDeleted: { $ne: true },
         centres: { $in: targetCentres },
       }).select("name username centres");
 
@@ -574,10 +719,33 @@ export const updateUser = async (req, res) => {
       }
     }
 
+    // 1-BM-per-cluster exclusivity rule: Ensure only one active BM manages each cluster
+    if (targetRole === PREK_ROLES.BM && cluster !== undefined && String(cluster).trim()) {
+      const cleanClusterTarget = String(cluster).trim();
+      const conflictingBM = await User.findOne({
+        role: PREK_ROLES.BM,
+        _id: { $ne: user._id },
+        cluster: { $regex: `^${cleanClusterTarget}$`, $options: "i" },
+        isActive: true,
+        isDeleted: { $ne: true },
+      }).select("name username cluster");
+
+      if (conflictingBM) {
+        return res.status(400).json({
+          success: false,
+          message: `Cluster allocation conflict: A single cluster cannot have multiple Business Managers. Cluster '${cleanClusterTarget}' is already managed by ${conflictingBM.name} (@${conflictingBM.username}).`,
+        });
+      }
+    }
+
     if (name) user.name = name.trim();
     if (email && typeof email === "string" && email.trim()) {
       const emailLower = email.toLowerCase().trim();
-      const existingEmailUser = await User.findOne({ email: emailLower, _id: { $ne: user._id } });
+      const existingEmailUser = await User.findOne({
+        email: emailLower,
+        _id: { $ne: user._id },
+        isDeleted: { $ne: true },
+      });
       if (existingEmailUser) {
         return res.status(400).json({ success: false, message: "Email is already registered by another user." });
       }
@@ -587,6 +755,10 @@ export const updateUser = async (req, res) => {
     if (zone !== undefined) user.zone = zone ? zone.trim() : "";
     if (cluster !== undefined) user.cluster = cluster ? cluster.trim() : "";
     if (centres !== undefined) user.centres = targetCentres;
+    const contactNumber = phone !== undefined && phone !== null ? phone : mobileNo;
+    if (contactNumber !== undefined && contactNumber !== null) {
+      user.phone = String(contactNumber).trim();
+    }
     if (typeof isActive === "boolean") user.isActive = isActive;
 
     // Password update handling (accepts password or newPassword)
@@ -624,6 +796,7 @@ export const updateUser = async (req, res) => {
         name: user.name,
         username: user.username,
         email: user.email,
+        phone: user.phone || "",
         role: user.role,
         zone: user.zone,
         cluster: user.cluster,
@@ -774,6 +947,334 @@ export const toggleUserActivation = async (req, res) => {
       data: user,
     });
   } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * FR-1.4 / Lifecycle: Soft Delete User Account
+ * - Releases assigned centres so new/replacement staff can take over.
+ * - Suffixes credentials to allow clean recreation without unique index collisions.
+ * - Stores previousCentres and original credentials for potential restoration.
+ */
+export const softDeleteUser = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can delete user accounts.",
+      });
+    }
+
+    const { id } = req.params;
+    const user = await User.findOne({
+      _id: id,
+      isDeleted: { $ne: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found or already deleted." });
+    }
+
+    // Security: Prevent self-deletion
+    if (req.user?.id && String(user._id) === String(req.user.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Security restriction: You cannot delete your own administrator account.",
+      });
+    }
+
+    const originalUsername = user.username;
+    const originalEmail = user.email;
+    const previousCentres = [...(user.centres || [])];
+
+    user.originalUsername = originalUsername;
+    user.originalEmail = originalEmail;
+    user.previousCentres = previousCentres;
+
+    // Release centres immediately so another AOM can be assigned to these schools
+    user.centres = [];
+    user.isDeleted = true;
+    user.isActive = false;
+    user.deletedAt = new Date();
+    user.deletedBy = req.user?.id || req.user?._id;
+
+    // Prefix username and email with deleted timestamp so new staff can use original username
+    user.username = `deleted_${Date.now()}_${originalUsername}`;
+    user.email = `deleted_${Date.now()}_${originalEmail}`;
+
+    await user.save();
+
+    await recordAuditLog({
+      req,
+      action: "USER_SOFT_DELETED",
+      entityType: "User",
+      entityId: user._id,
+      details: {
+        originalUsername,
+        originalEmail,
+        role: user.role,
+        zone: user.zone,
+        releasedCentres: previousCentres,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `User '${originalUsername}' has been soft deleted successfully. Assigned centres have been released and can now be reassigned.`,
+      data: {
+        id: user._id,
+        username: originalUsername,
+        email: originalEmail,
+        role: user.role,
+        deletedAt: user.deletedAt,
+        previousCentres,
+      },
+    });
+  } catch (err) {
+    console.error("SOFT DELETE USER ERROR:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * FR-1.4 / Lifecycle: List Soft-Deleted / Trashed Users
+ * Central & National Head can review deleted accounts and their released assignments.
+ */
+export const getDeletedUsers = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (
+      requesterRole !== PREK_ROLES.CENTRAL &&
+      requesterRole !== PREK_ROLES.NATIONAL_HEAD &&
+      req.user?.role !== "superAdmin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central and National Head administrators can view deleted user accounts.",
+      });
+    }
+
+    const { role, zone, search } = req.query;
+    const filter = { isDeleted: true };
+
+    if (role) filter.role = normalizePrekRole(role) || role;
+    if (zone) filter.zone = { $regex: `^${zone}$`, $options: "i" };
+
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      filter.$or = [
+        { name: { $regex: s, $options: "i" } },
+        { originalUsername: { $regex: s, $options: "i" } },
+        { originalEmail: { $regex: s, $options: "i" } },
+        { username: { $regex: s, $options: "i" } },
+        { email: { $regex: s, $options: "i" } },
+      ];
+    }
+
+    const deletedUsers = await User.find(filter)
+      .populate("deletedBy", "name username email")
+      .sort({ deletedAt: -1 })
+      .lean();
+
+    const formatted = deletedUsers.map((u) => ({
+      id: u._id,
+      name: u.name,
+      username: u.originalUsername || u.username.replace(/^deleted_\d+_/, ""),
+      email: u.originalEmail || u.email.replace(/^deleted_\d+_/, ""),
+      phone: u.phone || "",
+      role: u.role,
+      zone: u.zone || "",
+      cluster: u.cluster || "",
+      previousCentres: u.previousCentres || [],
+      deletedAt: u.deletedAt,
+      deletedBy: u.deletedBy || null,
+      isDeleted: true,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      total: formatted.length,
+      data: formatted,
+    });
+  } catch (err) {
+    console.error("GET DELETED USERS ERROR:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * FR-1.4 / Lifecycle: Restore Soft-Deleted User Account
+ * Checks:
+ * 1. Has an active user already been created with this username or email? If yes, returns clear conflict error.
+ * 2. If user is AOM, are any of their previous centres currently assigned to another active AOM? If yes, warns with conflict details.
+ */
+export const restoreUser = async (req, res) => {
+  try {
+    const requesterRole = normalizePrekRole(req.user?.role);
+    if (requesterRole !== PREK_ROLES.CENTRAL && req.user?.role !== "superAdmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Central (All-Activity Admin) can restore deleted user accounts.",
+      });
+    }
+
+    const { id } = req.params;
+    const user = await User.findOne({ _id: id, isDeleted: true });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted user not found with ID: " + id,
+      });
+    }
+
+    const targetUsername = (user.originalUsername || user.username.replace(/^deleted_\d+_/, "")).toLowerCase().trim();
+    const targetEmail = (user.originalEmail || user.email.replace(/^deleted_\d+_/, "")).toLowerCase().trim();
+
+    // 1. Conflict Check: Check if an active user was created with this username or email while this user was deleted
+    const activeUsernameConflict = await User.findOne({
+      username: targetUsername,
+      isDeleted: { $ne: true },
+    }).select("name username email role");
+
+    if (activeUsernameConflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot restore: An active user with username '@${targetUsername}' already exists (${activeUsernameConflict.name}, role: ${activeUsernameConflict.role}). To restore this user, either rename or delete the existing active user first.`,
+        conflictType: "USERNAME_EXISTS",
+        conflictingUser: {
+          id: activeUsernameConflict._id,
+          name: activeUsernameConflict.name,
+          username: activeUsernameConflict.username,
+          role: activeUsernameConflict.role,
+        },
+      });
+    }
+
+    const activeEmailConflict = await User.findOne({
+      email: targetEmail,
+      isDeleted: { $ne: true },
+    }).select("name username email role");
+
+    if (activeEmailConflict) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot restore: An active user with email '${targetEmail}' already exists (${activeEmailConflict.name}, role: ${activeEmailConflict.role}). To restore this user, please update or remove the active user first.`,
+        conflictType: "EMAIL_EXISTS",
+        conflictingUser: {
+          id: activeEmailConflict._id,
+          name: activeEmailConflict.name,
+          email: activeEmailConflict.email,
+          role: activeEmailConflict.role,
+        },
+      });
+    }
+
+    // 2. Conflict Check: If AOM, check centre exclusivity against other active AOMs
+    const targetCentres = req.body.centres !== undefined
+      ? (Array.isArray(req.body.centres) ? req.body.centres.map((c) => String(c).trim()).filter(Boolean) : [String(req.body.centres).trim()])
+      : (user.previousCentres || []);
+
+    if (user.role === PREK_ROLES.AOM && targetCentres.length > 0) {
+      const conflictingAOMs = await User.find({
+        role: PREK_ROLES.AOM,
+        _id: { $ne: user._id },
+        isActive: true,
+        isDeleted: { $ne: true },
+        centres: { $in: targetCentres },
+      }).select("name username centres");
+
+      if (conflictingAOMs.length > 0) {
+        const conflicts = [];
+        conflictingAOMs.forEach((u) => {
+          const overlap = u.centres.filter((c) => targetCentres.includes(c));
+          conflicts.push(`${u.name} (@${u.username}) currently manages: ${overlap.join(", ")}`);
+        });
+        return res.status(409).json({
+          success: false,
+          message: `Cannot restore AOM with original centres: Centre allocation conflict. Conflicting assignments: ${conflicts.join("; ")}. Please provide new unassigned centres or reassign existing active AOMs first.`,
+          conflictType: "CENTRE_ALLOCATION_CONFLICT",
+          conflicts,
+        });
+      }
+    }
+
+    // 3. Conflict Check: If BM, check cluster exclusivity against other active BMs
+    const targetCluster = req.body.cluster !== undefined
+      ? String(req.body.cluster).trim()
+      : user.cluster;
+
+    if (user.role === PREK_ROLES.BM && targetCluster) {
+      const conflictingBM = await User.findOne({
+        role: PREK_ROLES.BM,
+        _id: { $ne: user._id },
+        cluster: { $regex: `^${targetCluster}$`, $options: "i" },
+        isActive: true,
+        isDeleted: { $ne: true },
+      }).select("name username cluster");
+
+      if (conflictingBM) {
+        return res.status(409).json({
+          success: false,
+          message: `Cannot restore BM with original cluster '${targetCluster}': Cluster is already managed by active BM ${conflictingBM.name} (@${conflictingBM.username}). Please reassign or update cluster allocation first.`,
+          conflictType: "CLUSTER_ALLOCATION_CONFLICT",
+          conflictingBM: {
+            id: conflictingBM._id,
+            name: conflictingBM.name,
+            username: conflictingBM.username,
+            cluster: conflictingBM.cluster,
+          },
+        });
+      }
+    }
+
+    // 4. Restore User Account
+    user.username = targetUsername;
+    user.email = targetEmail;
+    user.isDeleted = false;
+    user.isActive = true;
+    user.deletedAt = null;
+    user.deletedBy = null;
+    user.centres = targetCentres;
+    user.previousCentres = [];
+    user.failedLoginAttempts = 0;
+    user.isLocked = false;
+
+    await user.save();
+
+    await recordAuditLog({
+      req,
+      action: "USER_RESTORED",
+      entityType: "User",
+      entityId: user._id,
+      details: {
+        restoredUsername: user.username,
+        restoredEmail: user.email,
+        role: user.role,
+        zone: user.zone,
+        centres: user.centres,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `User '@${user.username}' (${user.role}) has been restored successfully.`,
+      data: {
+        id: user._id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        phone: user.phone || "",
+        role: user.role,
+        zone: user.zone || "",
+        cluster: user.cluster || "",
+        centres: user.centres,
+        isActive: user.isActive,
+      },
+    });
+  } catch (err) {
+    console.error("RESTORE USER ERROR:", err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };

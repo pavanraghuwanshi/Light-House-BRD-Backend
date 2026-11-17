@@ -4,6 +4,7 @@ const router = express.Router();
 import { 
   addIncident, 
   getIncidents, 
+  getIncidentReports,
   updateIncident, 
   deleteIncident, 
   updateIncidentStatus,
@@ -20,6 +21,9 @@ router.post("/add-incident", authenticateUser, addIncident);
 
 // Case Log & Search (FR-7.1, FR-7.3)
 router.get("/get-incidents", authenticateUser, getIncidents);
+
+// Incident Reports with Summary Metrics & Deep Hierarchy Filtering
+router.get("/incident-reports", authenticateUser, getIncidentReports);
 
 // Zone Overview Dashboard & KPI Analytics (FR-4.1 - FR-4.6)
 router.get("/incident-stats", authenticateUser, getIncidentDashboard);
