@@ -3,6 +3,7 @@ import Zone from "../Models/zone.js";
 import User from "../Models/user.js";
 import Incident from "../Models/incident.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
+import { getUserScope, escapeRegex } from "../Utils/roleResolver.js";
 import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
@@ -155,9 +156,10 @@ export const createCentre = async (req, res) => {
   }
 };
 
-// GET /api/centres - List Centres / Schools (Filterable & Enriched with assigned AOM)
+// GET /api/centres - List Centres / Schools (Strictly Role/Zone Scoped & Enriched with assigned AOM)
 export const getCentres = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const {
       zone,
       state,
@@ -169,34 +171,63 @@ export const getCentres = async (req, res) => {
       limit = 50,
     } = req.query;
 
-    const filter = { isDeleted: false };
+    const andConditions = [{ isDeleted: false }];
+
+    // Strict Zone / Cluster / Centre Isolation for RSO, BM, AOM
+    if (!scope.isNational) {
+      if (scope.isRSO) {
+        if (!scope.zone) {
+          return res.status(200).json({ success: true, total: 0, page: 1, limit: 50, data: [] });
+        }
+        andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
+      } else if (scope.isBM) {
+        if (!scope.zone && !scope.cluster) {
+          return res.status(200).json({ success: true, total: 0, page: 1, limit: 50, data: [] });
+        }
+        if (scope.zone) {
+          andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
+        }
+        if (scope.cluster) {
+          andConditions.push({ cluster: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
+        }
+      } else if (scope.isAOM) {
+        if (scope.centres.length === 0) {
+          return res.status(200).json({ success: true, total: 0, page: 1, limit: 50, data: [] });
+        }
+        andConditions.push({ name: { $in: scope.centres } });
+      }
+    }
 
     if (isActive !== undefined) {
-      filter.isActive = isActive === "true" || isActive === true;
+      andConditions.push({ isActive: isActive === "true" || isActive === true });
     }
 
-    if (zone && zone !== "all") {
-      filter.zone = { $regex: `^${zone.trim()}$`, $options: "i" };
+    if (zone && String(zone).trim().toLowerCase() !== "all") {
+      andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
     }
 
-    if (state && state !== "all") {
-      filter.state = { $regex: `^${state.trim()}$`, $options: "i" };
+    if (state && String(state).trim().toLowerCase() !== "all") {
+      andConditions.push({ state: { $regex: `^${escapeRegex(String(state).trim())}$`, $options: "i" } });
     }
 
-    if (cluster && cluster !== "all") {
-      filter.cluster = { $regex: `^${cluster.trim()}$`, $options: "i" };
+    if (cluster && String(cluster).trim().toLowerCase() !== "all") {
+      andConditions.push({ cluster: { $regex: `^${escapeRegex(String(cluster).trim())}$`, $options: "i" } });
     }
 
     if (search && String(search).trim()) {
-      const s = String(search).trim();
-      filter.$or = [
-        { name: { $regex: s, $options: "i" } },
-        { code: { $regex: s, $options: "i" } },
-        { city: { $regex: s, $options: "i" } },
-        { state: { $regex: s, $options: "i" } },
-        { address: { $regex: s, $options: "i" } },
-      ];
+      const s = escapeRegex(String(search).trim());
+      andConditions.push({
+        $or: [
+          { name: { $regex: s, $options: "i" } },
+          { code: { $regex: s, $options: "i" } },
+          { city: { $regex: s, $options: "i" } },
+          { state: { $regex: s, $options: "i" } },
+          { address: { $regex: s, $options: "i" } },
+        ],
+      });
     }
+
+    const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
 
     const pageNum = Math.max(1, parseInt(page) || 1);
     const limitNum =
@@ -265,21 +296,51 @@ export const getCentres = async (req, res) => {
   }
 };
 
-// GET /api/centres/:id - Get Centre by ID or Code
+// GET /api/centres/:id - Get Centre by ID or Code (Strictly Role/Zone Scoped)
 export const getCentreById = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { id } = req.params;
     const centre = await Centre.findOne({
       $or: [
         { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null },
         { code: id.toUpperCase() },
-        { name: id },
+        { name: { $regex: `^${escapeRegex(id)}$`, $options: "i" } },
       ],
       isDeleted: false,
     }).lean();
 
     if (!centre) {
       return res.status(404).json({ success: false, message: "Centre not found." });
+    }
+
+    // Strict cross-zone / cross-cluster / cross-centre isolation
+    if (!scope.isNational) {
+      if (scope.isRSO) {
+        if (!scope.zone || centre.zone.toLowerCase() !== scope.zone.toLowerCase()) {
+          return res.status(403).json({
+            success: false,
+            message: `Access denied: You can only view centres within your assigned zone (${scope.zone || "None"}).`,
+          });
+        }
+      } else if (scope.isBM) {
+        const zoneMismatch = scope.zone && centre.zone.toLowerCase() !== scope.zone.toLowerCase();
+        const clusterMismatch = scope.cluster && (!centre.cluster || centre.cluster.toLowerCase() !== scope.cluster.toLowerCase());
+        if (zoneMismatch || clusterMismatch) {
+          return res.status(403).json({
+            success: false,
+            message: `Access denied: You can only view centres within your assigned cluster (${scope.cluster || scope.zone}).`,
+          });
+        }
+      } else if (scope.isAOM) {
+        const hasCentre = scope.centres.some((c) => c.toLowerCase() === centre.name.toLowerCase());
+        if (!hasCentre) {
+          return res.status(403).json({
+            success: false,
+            message: "Access denied: You can only view your assigned centre(s).",
+          });
+        }
+      }
     }
 
     // Look up assigned AOM and incident stats

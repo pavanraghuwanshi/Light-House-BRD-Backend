@@ -19,7 +19,7 @@ import {
   PREK_STATE_BASELINE,
   TOTAL_NETWORK_CENTRES,
 } from "../Utils/prekConstants.js";
-import { buildQueryWithRole } from "../Utils/roleResolver.js";
+import { buildQueryWithRole, getUserScope } from "../Utils/roleResolver.js";
 import { encrypt, decrypt, comparePassword } from "../Utils/crypto.js";
 
 describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporting Portal", () => {
@@ -1005,6 +1005,61 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       );
 
       assert.equal(visibleIncidents.length, 2, "New BM must immediately inherit all incidents in the cluster");
+    });
+  });
+
+  describe("15. RSO Strict Cross-Zone Isolation & Same-Zone Multi-RSO Access", () => {
+    it("allows multiple RSOs in the same zone (North) to share access to all North zone data", () => {
+      const rsoNorth1 = { user: { role: "RSO", zone: "North", username: "rso_north_1" }, query: {} };
+      const rsoNorth2 = { user: { role: "RSO", zone: "North", username: "rso_north_2" }, query: {} };
+
+      const filter1 = buildQueryWithRole(rsoNorth1);
+      const filter2 = buildQueryWithRole(rsoNorth2);
+
+      assert.deepEqual(filter1, filter2, "Both North RSOs must receive identical North-zone scope");
+      assert.equal(filter1.$or[0].zone.$regex, "^North$");
+      assert.equal(filter1.$or[1].region.$regex, "^North$");
+    });
+
+    it("prevents a North RSO from escaping their zone via ?zone=South or ?region=South query parameters", () => {
+      const northRsoQueryingSouth = {
+        user: { role: "RSO", zone: "North", username: "rso_north_1" },
+        query: { zone: "South" },
+      };
+
+      const filter = buildQueryWithRole(northRsoQueryingSouth);
+
+      assert.ok(Array.isArray(filter.$and), "Must use $and to intersect mandatory North scope with query filter");
+      assert.equal(filter.$and[0].$or[0].zone.$regex, "^North$", "Mandatory North zone restriction must remain intact");
+      assert.equal(filter.$and[1].$or[0].zone.$regex, "^South$", "Requested South zone is intersected (producing 0 results)");
+
+      // Simulate MongoDB evaluation against a South Zone incident
+      const southIncident = { zone: "South", region: "South", state: "Tamil Nadu" };
+      const matchesNorth = new RegExp(filter.$and[0].$or[0].zone.$regex, "i").test(southIncident.zone);
+      assert.equal(matchesNorth, false, "South Zone incident must NEVER match North RSO filter");
+    });
+
+    it("fails closed when an RSO has no zone assigned instead of returning all zones", () => {
+      const rsoWithoutZone = { user: { role: "RSO", zone: "" }, query: {} };
+      const filter = buildQueryWithRole(rsoWithoutZone);
+
+      assert.deepEqual(filter.zone, { $in: [] }, "RSO without zone must fail closed (0 records)");
+    });
+
+    it("restricts baseline state & zone scope for RSO to only their assigned zone", () => {
+      const northScope = getUserScope({ user: { role: "RSO", zone: "North" } });
+      assert.equal(northScope.isRSO, true);
+      assert.equal(northScope.isNational, false);
+      assert.equal(northScope.zone, "North");
+
+      const visibleBaselineStates = PREK_STATE_BASELINE.filter(
+        (s) => s.zone.toLowerCase() === northScope.zone.toLowerCase()
+      );
+      assert.ok(visibleBaselineStates.length > 0, "North RSO sees North baseline states");
+      assert.ok(
+        visibleBaselineStates.every((s) => s.zone === "North"),
+        "North RSO must see ZERO South, West, East, or Central states"
+      );
     });
   });
 });

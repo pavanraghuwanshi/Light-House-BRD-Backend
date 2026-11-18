@@ -3,6 +3,7 @@ import Zone from "../Models/zone.js";
 import Centre from "../Models/centre.js";
 import User from "../Models/user.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
+import { getUserScope, escapeRegex } from "../Utils/roleResolver.js";
 import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
@@ -134,30 +135,64 @@ export const createCluster = async (req, res) => {
   }
 };
 
-// GET /api/clusters - List Clusters (Filterable by Zone & Enriched with BM & AOMs)
+// GET /api/clusters - List Clusters (Strictly Role/Zone Scoped & Enriched with BM & AOMs)
 export const getClusters = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { zone, search, isActive, unassigned } = req.query;
-    const filter = { isDeleted: false };
+    const andConditions = [{ isDeleted: false }];
 
-    if (isActive !== undefined) {
-      filter.isActive = isActive === "true" || isActive === true;
+    // Strict Zone / Cluster Isolation for RSO, BM, AOM
+    if (!scope.isNational) {
+      if (scope.isRSO) {
+        if (!scope.zone) {
+          return res.status(200).json({ success: true, total: 0, data: [] });
+        }
+        andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
+      } else if (scope.isBM) {
+        if (!scope.cluster && !scope.zone) {
+          return res.status(200).json({ success: true, total: 0, data: [] });
+        }
+        if (scope.zone) {
+          andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
+        }
+        if (scope.cluster) {
+          andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
+        }
+      } else if (scope.isAOM) {
+        if (!scope.zone && !scope.cluster) {
+          return res.status(200).json({ success: true, total: 0, data: [] });
+        }
+        if (scope.zone) {
+          andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
+        }
+        if (scope.cluster) {
+          andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
+        }
+      }
     }
 
-    if (zone && zone !== "all") {
-      filter.zone = { $regex: `^${zone.trim()}$`, $options: "i" };
+    if (isActive !== undefined) {
+      andConditions.push({ isActive: isActive === "true" || isActive === true });
+    }
+
+    if (zone && String(zone).trim().toLowerCase() !== "all") {
+      andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
     }
 
     if (search && String(search).trim()) {
-      const s = String(search).trim();
-      filter.$or = [
-        { name: { $regex: s, $options: "i" } },
-        { code: { $regex: s, $options: "i" } },
-        { zone: { $regex: s, $options: "i" } },
-        { description: { $regex: s, $options: "i" } },
-      ];
+      const s = escapeRegex(String(search).trim());
+      andConditions.push({
+        $or: [
+          { name: { $regex: s, $options: "i" } },
+          { code: { $regex: s, $options: "i" } },
+          { zone: { $regex: s, $options: "i" } },
+          { description: { $regex: s, $options: "i" } },
+        ],
+      });
     }
 
+    const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
     const clusters = await Cluster.find(filter).sort({ zone: 1, name: 1 }).lean();
 
     // Fetch active BMs to dynamically link assigned BM to each cluster
@@ -249,21 +284,38 @@ export const getClusters = async (req, res) => {
   }
 };
 
-// GET /api/clusters/:id - Get Cluster by ID, Code, or Name
+// GET /api/clusters/:id - Get Cluster by ID, Code, or Name (Strictly Role/Zone Scoped)
 export const getClusterById = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { id } = req.params;
     const cluster = await Cluster.findOne({
       $or: [
         { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null },
         { code: id.toUpperCase() },
-        { name: id },
+        { name: { $regex: `^${escapeRegex(id)}$`, $options: "i" } },
       ],
       isDeleted: false,
     }).lean();
 
     if (!cluster) {
       return res.status(404).json({ success: false, message: "Cluster not found." });
+    }
+
+    // Strict cross-zone / cross-cluster isolation
+    if (!scope.isNational) {
+      if (!scope.zone || cluster.zone.toLowerCase() !== scope.zone.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You can only view clusters within your assigned zone (${scope.zone || "None"}).`,
+        });
+      }
+      if ((scope.isBM || scope.isAOM) && scope.cluster && cluster.name.toLowerCase() !== scope.cluster.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You can only view your assigned cluster (${scope.cluster}).`,
+        });
+      }
     }
 
     // Active BM assigned to this cluster
@@ -330,21 +382,44 @@ export const getClusterById = async (req, res) => {
   }
 };
 
-// GET /api/clusters/:id/aoms - Supervised AOMs within this Cluster
+// GET /api/clusters/:id/aoms - Supervised AOMs within this Cluster (Strictly Role/Zone Scoped)
 export const getClusterAOMs = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { id } = req.params;
     const cluster = await Cluster.findOne({
       $or: [
         { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null },
         { code: id.toUpperCase() },
-        { name: id },
+        { name: { $regex: `^${escapeRegex(id)}$`, $options: "i" } },
       ],
       isDeleted: false,
     }).lean();
 
     if (!cluster) {
       return res.status(404).json({ success: false, message: "Cluster not found." });
+    }
+
+    // Strict cross-zone / cross-cluster isolation
+    if (!scope.isNational) {
+      if (!scope.zone || cluster.zone.toLowerCase() !== scope.zone.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You can only view AOMs within your assigned zone (${scope.zone || "None"}).`,
+        });
+      }
+      if (scope.isBM && scope.cluster && cluster.name.toLowerCase() !== scope.cluster.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You can only view AOMs under your assigned cluster (${scope.cluster}).`,
+        });
+      }
+      if (scope.isAOM) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: Area Operations Managers cannot view peer AOM listings.",
+        });
+      }
     }
 
     const centres = await Centre.find({

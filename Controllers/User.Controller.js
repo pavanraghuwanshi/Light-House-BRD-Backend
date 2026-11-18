@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { comparePassword, encrypt, decrypt } from "../Utils/crypto.js";
 import authCache from "../Utils/authCache.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
+import { escapeRegex } from "../Utils/roleResolver.js";
 import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
@@ -726,7 +727,10 @@ export const createUser = async (req, res) => {
 };
 
 /**
- * FR-1.4: List Provisioned Users (Central & National Head)
+ * FR-1.4: List Provisioned Users
+ * - Central & National Head: All users across all zones (with decrypted passwords)
+ * - RSO: Staff strictly within their own assigned zone (co-RSOs in the same zone, BMs, AOMs; NEVER other zones)
+ * - BM: AOMs strictly within their assigned cluster & zone
  */
 export const getUsers = async (req, res) => {
   try {
@@ -735,38 +739,86 @@ export const getUsers = async (req, res) => {
       requesterRole === PREK_ROLES.CENTRAL ||
       requesterRole === PREK_ROLES.NATIONAL_HEAD ||
       req.user?.role === "superAdmin";
+    const isRSO = requesterRole === PREK_ROLES.RSO;
     const isBM = requesterRole === PREK_ROLES.BM;
 
-    if (!isCentralOrNational && !isBM) {
+    if (!isCentralOrNational && !isRSO && !isBM) {
       return res.status(403).json({
         success: false,
-        message: "Access denied. Only Central, National Head, and Business Managers can list staff.",
+        message: "Access denied. Only Central, National Head, RSO, and Business Managers can list staff.",
       });
     }
 
     const { role, zone, cluster: queryCluster, search, includeDeleted } = req.query;
-    const filter = includeDeleted === "true" || includeDeleted === true ? {} : { isDeleted: { $ne: true } };
+    const allowDeleted = isCentralOrNational && (includeDeleted === "true" || includeDeleted === true);
+    const andConditions = allowDeleted ? [] : [{ isDeleted: { $ne: true } }];
 
-    if (isBM) {
-      // Business Manager is scoped to view the AOMs under their assigned cluster
-      filter.role = PREK_ROLES.AOM;
-      if (req.user?.cluster) {
-        filter.cluster = req.user.cluster;
+    const reqZone = req.user?.zone ? String(req.user.zone).trim() : "";
+    const reqCluster = req.user?.cluster ? String(req.user.cluster).trim() : "";
+
+    if (isRSO) {
+      if (!reqZone) {
+        return res.status(200).json({ success: true, total: 0, data: [] });
+      }
+      // Strictly lock RSO to their own zone (peer RSOs in same zone + BMs + AOMs in same zone)
+      andConditions.push({ zone: { $regex: `^${escapeRegex(reqZone)}$`, $options: "i" } });
+      andConditions.push({ role: { $in: [PREK_ROLES.RSO, PREK_ROLES.BM, PREK_ROLES.AOM] } });
+
+      if (role) {
+        const requestedRole = normalizePrekRole(role) || role;
+        andConditions.push({ role: requestedRole });
+      }
+      if (queryCluster) {
+        andConditions.push({ cluster: { $regex: `^${escapeRegex(String(queryCluster).trim())}$`, $options: "i" } });
+      }
+      // If RSO tries to query a different zone, intersect so it returns 0 records (never leaks another zone)
+      if (zone && String(zone).trim().toLowerCase() !== "all") {
+        andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
+      }
+    } else if (isBM) {
+      // Business Manager is scoped to view the AOMs under their assigned cluster & zone
+      andConditions.push({ role: PREK_ROLES.AOM });
+      if (!reqCluster && !reqZone) {
+        return res.status(200).json({ success: true, total: 0, data: [] });
+      }
+      if (reqCluster) {
+        andConditions.push({ cluster: { $regex: `^${escapeRegex(reqCluster)}$`, $options: "i" } });
+      }
+      if (reqZone) {
+        andConditions.push({ zone: { $regex: `^${escapeRegex(reqZone)}$`, $options: "i" } });
+      }
+      if (zone && String(zone).trim().toLowerCase() !== "all") {
+        andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
       }
     } else {
-      if (role) filter.role = normalizePrekRole(role) || role;
-      if (queryCluster) filter.cluster = { $regex: `^${queryCluster}$`, $options: "i" };
+      // Central & National Head
+      if (role) andConditions.push({ role: normalizePrekRole(role) || role });
+      if (queryCluster) {
+        andConditions.push({ cluster: { $regex: `^${escapeRegex(String(queryCluster).trim())}$`, $options: "i" } });
+      }
+      if (zone && String(zone).trim().toLowerCase() !== "all") {
+        andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
+      }
     }
 
-    if (zone) filter.zone = { $regex: `^${zone}$`, $options: "i" };
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { username: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { cluster: { $regex: search, $options: "i" } },
-      ];
+    if (search && String(search).trim()) {
+      const s = escapeRegex(String(search).trim());
+      andConditions.push({
+        $or: [
+          { name: { $regex: s, $options: "i" } },
+          { username: { $regex: s, $options: "i" } },
+          { email: { $regex: s, $options: "i" } },
+          { cluster: { $regex: s, $options: "i" } },
+        ],
+      });
     }
+
+    const filter =
+      andConditions.length === 0
+        ? {}
+        : andConditions.length === 1
+        ? andConditions[0]
+        : { $and: andConditions };
 
     const users = await User.find(filter)
       .sort({ createdAt: -1 })

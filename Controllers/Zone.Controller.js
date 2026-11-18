@@ -2,6 +2,7 @@ import Zone from "../Models/zone.js";
 import Centre from "../Models/centre.js";
 import User from "../Models/user.js";
 import { PREK_ROLES, normalizePrekRole } from "../Utils/prekConstants.js";
+import { getUserScope, escapeRegex } from "../Utils/roleResolver.js";
 import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
@@ -123,39 +124,54 @@ export const createZone = async (req, res) => {
   }
 };
 
-// GET /api/zones - List Zones (Authenticated Users)
+// GET /api/zones - List Zones (Scoped by Role: National sees all; RSO/BM/AOM see ONLY their assigned zone)
 export const getZones = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { search, isActive } = req.query;
-    const filter = { isDeleted: false };
+    const andConditions = [{ isDeleted: false }];
+
+    // Strict Zone Isolation for RSO, BM, AOM
+    if (!scope.isNational) {
+      if (!scope.zone) {
+        return res.status(200).json({ success: true, total: 0, data: [] });
+      }
+      andConditions.push({
+        name: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" },
+      });
+    }
 
     if (isActive !== undefined) {
-      filter.isActive = isActive === "true" || isActive === true;
+      andConditions.push({ isActive: isActive === "true" || isActive === true });
     }
 
     if (search && String(search).trim()) {
-      const s = String(search).trim();
-      filter.$or = [
-        { name: { $regex: s, $options: "i" } },
-        { code: { $regex: s, $options: "i" } },
-        { description: { $regex: s, $options: "i" } },
-        { states: { $in: [new RegExp(s, "i")] } },
-      ];
+      const s = escapeRegex(String(search).trim());
+      andConditions.push({
+        $or: [
+          { name: { $regex: s, $options: "i" } },
+          { code: { $regex: s, $options: "i" } },
+          { description: { $regex: s, $options: "i" } },
+          { states: { $in: [new RegExp(s, "i")] } },
+        ],
+      });
     }
 
+    const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
     const zones = await Zone.find(filter).sort({ name: 1 }).lean();
 
-    // Enrich zones with active RSO details and centre count
+    // Enrich zones with all active RSOs in that zone and centre count
     const enrichedZones = await Promise.all(
       zones.map(async (z) => {
-        const [centreCount, activeRSO] = await Promise.all([
+        const zoneRegex = { $regex: `^${escapeRegex(z.name)}$`, $options: "i" };
+        const [centreCount, activeRSOList] = await Promise.all([
           Centre.countDocuments({
-            zone: { $regex: `^${z.name}$`, $options: "i" },
+            zone: zoneRegex,
             isDeleted: false,
           }),
-          User.findOne({
+          User.find({
             role: PREK_ROLES.RSO,
-            zone: { $regex: `^${z.name}$`, $options: "i" },
+            zone: zoneRegex,
             isActive: true,
             isDeleted: { $ne: true },
           })
@@ -163,18 +179,19 @@ export const getZones = async (req, res) => {
             .lean(),
         ]);
 
+        const formattedRSOs = activeRSOList.map((rso) => ({
+          id: rso._id,
+          name: rso.name,
+          username: rso.username,
+          email: rso.email,
+          phone: rso.phone || "",
+        }));
+
         return {
           ...z,
           centreCount,
-          activeRSO: activeRSO
-            ? {
-                id: activeRSO._id,
-                name: activeRSO.name,
-                username: activeRSO.username,
-                email: activeRSO.email,
-                phone: activeRSO.phone || "",
-              }
-            : null,
+          activeRSO: formattedRSOs[0] || null,
+          activeRSOs: formattedRSOs,
         };
       })
     );
@@ -190,12 +207,13 @@ export const getZones = async (req, res) => {
   }
 };
 
-// GET /api/zones/:id - Get Zone by ID or Code
+// GET /api/zones/:id - Get Zone by ID or Code (Scoped by Role)
 export const getZoneById = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     const { id } = req.params;
     const zone = await Zone.findOne({
-      $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { code: id.toUpperCase() }, { name: id }],
+      $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { code: id.toUpperCase() }, { name: { $regex: `^${escapeRegex(id)}$`, $options: "i" } }],
       isDeleted: false,
     }).lean();
 
@@ -203,14 +221,25 @@ export const getZoneById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Zone not found." });
     }
 
-    const [centres, activeRSO] = await Promise.all([
-      Centre.find({ zone: { $regex: `^${zone.name}$`, $options: "i" }, isDeleted: false })
+    // Strict cross-zone isolation for non-National roles (RSO, BM, AOM)
+    if (!scope.isNational) {
+      if (!scope.zone || zone.name.toLowerCase() !== scope.zone.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You are only authorized to access data for your assigned zone (${scope.zone || "None"}).`,
+        });
+      }
+    }
+
+    const zoneRegex = { $regex: `^${escapeRegex(zone.name)}$`, $options: "i" };
+    const [centres, activeRSOList] = await Promise.all([
+      Centre.find({ zone: zoneRegex, isDeleted: false })
         .select("name code state city cluster isActive")
         .sort({ name: 1 })
         .lean(),
-      User.findOne({
+      User.find({
         role: PREK_ROLES.RSO,
-        zone: { $regex: `^${zone.name}$`, $options: "i" },
+        zone: zoneRegex,
         isActive: true,
         isDeleted: { $ne: true },
       })
@@ -223,7 +252,8 @@ export const getZoneById = async (req, res) => {
       data: {
         ...zone,
         centres,
-        activeRSO,
+        activeRSO: activeRSOList[0] || null,
+        activeRSOs: activeRSOList,
       },
     });
   } catch (err) {

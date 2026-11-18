@@ -5,7 +5,7 @@ import Incident, {
   normalizeStatus,
 } from "../Models/incident.js";
 import AuditLog from "../Models/auditLog.js";
-import { buildQueryWithRole } from "../Utils/roleResolver.js";
+import { buildQueryWithRole, getUserScope, escapeRegex } from "../Utils/roleResolver.js";
 import mongoose from "mongoose";
 import {
   parseDashboardDateRange,
@@ -84,6 +84,16 @@ export const addIncident = async (req, res) => {
       });
     }
 
+    // Enforce zone scope for RSO, BM, AOM when creating incidents
+    const scope = getUserScope(req);
+    const requestedZone = String(zone || region || "").trim();
+    if (!scope.isNational && scope.zone && requestedZone && requestedZone.toLowerCase() !== scope.zone.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        message: `Access denied: You are only authorized to report incidents within your assigned zone (${scope.zone}).`,
+      });
+    }
+
     // Determine type and enforce severity rules (FR-5.2)
     const finalType = incidentType || subCategory || "Other";
     const finalSeverity = enforceSeverityRules(finalType, requestedSeverity);
@@ -91,14 +101,15 @@ export const addIncident = async (req, res) => {
     const incidentDate = date ? new Date(date) : new Date();
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
+    const resolvedZone = requestedZone || scope.zone || "North";
 
     const newIncident = new Incident({
       caseId,
       incidentType: finalType,
       subCategory: finalType,
       severity: finalSeverity,
-      zone: zone || region || req.user?.zone || "North",
-      region: region || zone || req.user?.zone || "North",
+      zone: resolvedZone,
+      region: resolvedZone,
       state: state || "",
       centreName: centreName || req.user?.centres?.[0] || "",
       date: incidentDate,
@@ -649,16 +660,22 @@ export const deleteIncident = async (req, res) => {
  */
 export const getNationalDashboard = async (req, res) => {
   try {
+    const scope = getUserScope(req);
     let filter = {};
     try {
       filter = buildQueryWithRole(req);
     } catch (err) {
-      // Default to open filter for National Head / Central
+      return res.status(403).json({
+        success: false,
+        message: err.message || "Unauthorized access.",
+      });
     }
 
     delete filter.status;
+    // State query param is used for drill-down below, not for excluding other tiles in the map
+    delete filter.state;
 
-    // Aggregate incidents by state & zone
+    // Aggregate incidents by state & zone (strictly within user's RBAC filter)
     const stateIncidentsAgg = await Incident.aggregate([
       { $match: filter },
       {
@@ -714,12 +731,21 @@ export const getNationalDashboard = async (req, res) => {
       totalCriticalOrHigh += item.criticalOrHighCount || 0;
 
       if (stateName && stateName.toLowerCase() !== "unknown") {
-        stateCountMap.set(stateName.toLowerCase(), count);
+        stateCountMap.set(stateName.toLowerCase(), (stateCountMap.get(stateName.toLowerCase()) || 0) + count);
       }
     });
 
+    // Restrict baseline states & zones strictly to user's assigned zone for non-National roles (RSO/BM/AOM)
+    const scopedBaseline = scope.isNational
+      ? PREK_STATE_BASELINE
+      : scope.zone
+      ? PREK_STATE_BASELINE.filter(
+          (baseState) => baseState.zone.toLowerCase() === scope.zone.toLowerCase()
+        )
+      : [];
+
     // Compute State Tile Map (FR-3.2)
-    const stateTileMap = PREK_STATE_BASELINE.map((baseState) => {
+    const stateTileMap = scopedBaseline.map((baseState) => {
       const incidentCount = stateCountMap.get(baseState.state.toLowerCase()) || 0;
       const incidentRate =
         baseState.centreCount > 0
@@ -761,7 +787,7 @@ export const getNationalDashboard = async (req, res) => {
       };
     });
 
-    // FR-3.5: States to watch (Ranked by highest incident rate)
+    // FR-3.5: States to watch (Ranked by highest incident rate within user's scope)
     const statesToWatch = [...stateTileMap]
       .sort((a, b) => b.incidentRate - a.incidentRate || b.incidentCount - a.incidentCount)
       .slice(0, 5)
@@ -770,8 +796,10 @@ export const getNationalDashboard = async (req, res) => {
         ...item,
       }));
 
-    // FR-3.1: National Metrics
-    const totalCentres = TOTAL_NETWORK_CENTRES;
+    // FR-3.1: National / Scoped Metrics
+    const totalCentres = scope.isNational
+      ? TOTAL_NETWORK_CENTRES
+      : scopedBaseline.reduce((sum, s) => sum + (s.centreCount || 0), 0);
     const nationalIncidentRate =
       totalCentres > 0
         ? Number(((totalIncidents / totalCentres) * 100).toFixed(2))
@@ -781,7 +809,7 @@ export const getNationalDashboard = async (req, res) => {
         ? `${Math.round((totalClosed / totalIncidents) * 100)}%`
         : "0%";
 
-    // FR-3.3: Selected state drill-down
+    // FR-3.3: Selected state drill-down (strictly constrained to user's RBAC scope!)
     let selectedStateDetails = null;
     const requestedState = req.query.state;
     if (requestedState) {
@@ -789,12 +817,14 @@ export const getNationalDashboard = async (req, res) => {
         (s) => s.state.toLowerCase() === String(requestedState).trim().toLowerCase()
       );
       if (matched) {
-        const stateIncidents = await Incident.find({
-          state: { $regex: `^${matched.state}$`, $options: "i" },
-        })
+        const stateCondition = { state: { $regex: `^${escapeRegex(matched.state)}$`, $options: "i" } };
+        const drilldownQuery =
+          Object.keys(filter).length > 0 ? { $and: [filter, stateCondition] } : stateCondition;
+
+        const stateIncidents = await Incident.find(drilldownQuery)
           .sort({ date: -1, createdAt: -1 })
           .limit(10)
-          .select("caseId incidentType severity status date reporterName description escalationOwner");
+          .select("caseId incidentType severity status date reporterName description escalationOwner zone centreName");
 
         selectedStateDetails = {
           ...matched,
@@ -983,10 +1013,18 @@ export const getIncidentDashboard = async (req, res) => {
 
     delete filter.status;
 
+    if (filter.zone) {
+      if (String(filter.zone).trim().toLowerCase() === "all") {
+        delete filter.zone;
+      } else if (typeof filter.zone === "string") {
+        filter.zone = { $in: getRegionVariants(filter.zone) };
+      }
+    }
+
     if (filter.region) {
       if (String(filter.region).trim().toLowerCase() === "all") {
         delete filter.region;
-      } else {
+      } else if (typeof filter.region === "string") {
         filter.region = { $in: getRegionVariants(filter.region) };
       }
     }
@@ -999,6 +1037,18 @@ export const getIncidentDashboard = async (req, res) => {
       }
     }
 
+    const mergeDateFilter = (dateFilter) => {
+      if (!dateFilter) return;
+      if (filter.$and) {
+        filter.$and.push(dateFilter);
+      } else if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, dateFilter];
+        delete filter.$or;
+      } else {
+        filter.$or = dateFilter.$or;
+      }
+    };
+
     const { startDate, endDate, month } = req.query;
     if (month && String(month).trim().toLowerCase() !== "all") {
       const parsedMonth = parseDashboardMonth(month);
@@ -1009,16 +1059,7 @@ export const getIncidentDashboard = async (req, res) => {
         });
       }
       if (parsedMonth) {
-        const dateFilter = buildEffectiveDateFilter(parsedMonth.start, parsedMonth.end);
-        if (dateFilter) {
-          if (filter.$or) {
-            filter.$and = filter.$and || [];
-            filter.$and.push({ $or: filter.$or }, dateFilter);
-            delete filter.$or;
-          } else {
-            filter.$or = dateFilter.$or;
-          }
-        }
+        mergeDateFilter(buildEffectiveDateFilter(parsedMonth.start, parsedMonth.end));
       }
     } else if (startDate !== undefined || endDate !== undefined) {
       const { start, end, error: dateError } = parseDashboardDateRange(startDate, endDate);
@@ -1029,16 +1070,7 @@ export const getIncidentDashboard = async (req, res) => {
         });
       }
 
-      const dateFilter = buildEffectiveDateFilter(start, end);
-      if (dateFilter) {
-        if (filter.$or) {
-          filter.$and = filter.$and || [];
-          filter.$and.push({ $or: filter.$or }, dateFilter);
-          delete filter.$or;
-        } else {
-          filter.$or = dateFilter.$or;
-        }
-      }
+      mergeDateFilter(buildEffectiveDateFilter(start, end));
 
       delete filter.startDate;
       delete filter.endDate;
