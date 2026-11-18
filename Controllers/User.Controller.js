@@ -329,6 +329,13 @@ export const resetPassword = async (req, res) => {
       message: `Password for ${user.username} has been reset successfully.`,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -453,6 +460,13 @@ export const logoutUser = async (req, res) => {
       message: "Logged out successfully.",
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -700,6 +714,13 @@ export const createUser = async (req, res) => {
       },
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -768,12 +789,19 @@ export const getUsers = async (req, res) => {
       data: usersFormatted,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 /**
- * FR-1.4: Update User Details & Assignment (Name, Email, Password, Role, Zone, Cluster, Centres, Status)
+ * FR-1.4: Update User Details & Assignment (Name, Username, Email, Phone, Password, Role, Zone, Cluster, Centres, Status)
  */
 export const updateUser = async (req, res) => {
   try {
@@ -788,6 +816,7 @@ export const updateUser = async (req, res) => {
     const { id } = req.params;
     const {
       name,
+      username,
       email,
       phone,
       mobileNo,
@@ -798,6 +827,7 @@ export const updateUser = async (req, res) => {
       cluster,
       centres,
       isActive,
+      isLocked,
     } = req.body;
 
     const user = await User.findById(id);
@@ -805,7 +835,14 @@ export const updateUser = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    const targetRole = role ? (normalizePrekRole(role) || role) : user.role;
+    const targetRole = role ? normalizePrekRole(role) : user.role;
+    if (role && !targetRole) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role: '${role}'. Allowed Pre-K roles are: AOM, BM, RSO, National Head, Central.`,
+      });
+    }
+
     const targetCentres = centres !== undefined
       ? (Array.isArray(centres) ? centres.map((c) => String(c).trim()).filter(Boolean) : [String(centres).trim()])
       : user.centres;
@@ -854,28 +891,96 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    if (name) user.name = name.trim();
+    if (name && typeof name === "string" && name.trim()) {
+      user.name = name.trim();
+    }
+
+    // Username update handling: allow keeping own username, block duplicates belonging to other users in DB
+    if (username && typeof username === "string" && username.trim()) {
+      const usernameLower = username.toLowerCase().trim();
+      if (usernameLower !== (user.username || "").toLowerCase()) {
+        const existingActiveUsername = await User.findOne({
+          username: usernameLower,
+          _id: { $ne: user._id },
+          isDeleted: { $ne: true },
+        });
+        if (existingActiveUsername) {
+          return res.status(400).json({
+            success: false,
+            message: `Duplicate username: '@${usernameLower}' already exists for another user.`,
+          });
+        }
+
+        const existingDeletedUsername = await User.findOne({
+          $or: [{ username: usernameLower }, { originalUsername: usernameLower }],
+          _id: { $ne: user._id },
+          isDeleted: true,
+        });
+        if (existingDeletedUsername) {
+          return res.status(409).json({
+            success: false,
+            canRestore: true,
+            conflictType: "ALREADY_EXISTS_DELETED",
+            message: `Duplicate username: '@${usernameLower}' already exists in a soft-deleted account. Please choose a different username or restore that account.`,
+            existingId: existingDeletedUsername._id,
+          });
+        }
+
+        user.username = usernameLower;
+      }
+    }
+
+    // Email update handling: allow keeping own email, block duplicates belonging to other users in DB
     if (email && typeof email === "string" && email.trim()) {
       const emailLower = email.toLowerCase().trim();
-      const existingEmailUser = await User.findOne({
-        email: emailLower,
-        _id: { $ne: user._id },
-        isDeleted: { $ne: true },
-      });
-      if (existingEmailUser) {
-        return res.status(400).json({ success: false, message: "Email is already registered by another user." });
+      if (emailLower !== (user.email || "").toLowerCase()) {
+        const existingActiveEmail = await User.findOne({
+          email: emailLower,
+          _id: { $ne: user._id },
+          isDeleted: { $ne: true },
+        });
+        if (existingActiveEmail) {
+          return res.status(400).json({
+            success: false,
+            message: `Duplicate email: '${emailLower}' is already registered by another user.`,
+          });
+        }
+
+        const existingDeletedEmail = await User.findOne({
+          $or: [{ email: emailLower }, { originalEmail: emailLower }],
+          _id: { $ne: user._id },
+          isDeleted: true,
+        });
+        if (existingDeletedEmail) {
+          return res.status(409).json({
+            success: false,
+            canRestore: true,
+            conflictType: "ALREADY_EXISTS_DELETED",
+            message: `Duplicate email: '${emailLower}' already exists in a soft-deleted account. Please use a different email or restore that account.`,
+            existingId: existingDeletedEmail._id,
+          });
+        }
+
+        user.email = emailLower;
       }
-      user.email = emailLower;
     }
+
     if (role) user.role = targetRole;
-    if (zone !== undefined) user.zone = zone ? zone.trim() : "";
-    if (cluster !== undefined) user.cluster = cluster ? cluster.trim() : "";
+    if (zone !== undefined) user.zone = zone ? String(zone).trim() : "";
+    if (cluster !== undefined) user.cluster = cluster ? String(cluster).trim() : "";
     if (centres !== undefined) user.centres = targetCentres;
     const contactNumber = phone !== undefined && phone !== null ? phone : mobileNo;
     if (contactNumber !== undefined && contactNumber !== null) {
       user.phone = String(contactNumber).trim();
     }
     if (typeof isActive === "boolean") user.isActive = isActive;
+    if (typeof isLocked === "boolean") {
+      user.isLocked = isLocked;
+      if (!isLocked) {
+        user.failedLoginAttempts = 0;
+        user.lockUntil = null;
+      }
+    }
 
     // Password update handling (accepts password or newPassword)
     const updatedPassword = password || newPassword;
@@ -889,6 +994,10 @@ export const updateUser = async (req, res) => {
     }
 
     await user.save();
+
+    if (authCache && authCache.del) {
+      authCache.del(user._id.toString());
+    }
 
     await recordAuditLog({
       req,
@@ -918,10 +1027,18 @@ export const updateUser = async (req, res) => {
         cluster: user.cluster,
         centres: user.centres,
         isActive: user.isActive,
+        isLocked: user.isLocked,
         password: user.password ? decrypt(user.password) : "",
       },
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -963,6 +1080,13 @@ export const unlockUser = async (req, res) => {
       message: `Account for ${user.username} has been unlocked successfully.`,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -1051,6 +1175,13 @@ export const adminResetPassword = async (req, res) => {
       message: `Password for ${user.username} has been reset successfully.`,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -1100,6 +1231,13 @@ export const toggleUserActivation = async (req, res) => {
       data: user,
     });
   } catch (err) {
+    if (err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || "field";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${dupField}: this ${dupField} already exists in the database.`,
+      });
+    }
     return res.status(500).json({ success: false, message: err.message });
   }
 };

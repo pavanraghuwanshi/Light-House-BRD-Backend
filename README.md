@@ -149,7 +149,7 @@ To permanently protect same-level data privacy:
   - `GET /api/users/deleted`: Lists all soft-deleted / trashed users with their original usernames, emails, roles, released centre assignments, and deletion timestamps.
   - `PUT /api/users/:id`: Updates user profiles:
     - Supports password updates via `password` or `newPassword` (encrypted via AES-256-CBC, auto-unlocks locked accounts, and resets `failedLoginAttempts: 0`).
-    - Supports updates to `phone`, `email` (with duplicate verification against other accounts), `name`, `role`, `zone`, `cluster`, `centres`, and `isActive`.
+    - Supports updates to `name`, `username` (with duplicate verification against other active accounts), `email` (with duplicate verification), `phone`, `role`, `zone`, `cluster`, `centres`, `isActive`, and `isLocked`.
     - Automatically validates 1-AOM-per-centre allocation whenever centres are reassigned.
   - `DELETE /api/users/:id`: **Soft Delete Account (FR-1.4 / Lifecycle):** Safely deactivates and archives the user account (`isDeleted: true`), frees up assigned centres immediately so replacement staff can take over, and archives original credentials.
   - `PUT /api/users/:id/restore`: **Restore Soft-Deleted Account:** Restores a trashed user account with automated collision prevention:
@@ -492,10 +492,12 @@ To permanently protect same-level data privacy:
 - **Endpoint:** `PUT /api/users/:id`
 - **Access:** `Central` (All-Activity Admin)
 - **Headers:** `Authorization: Bearer <central_token>`, `Content-Type: application/json`
-- **Request Body:**
+- **Request Body (All fields optional — send any combination you want to edit):**
   ```json
   {
     "name": "Karan P.",
+    "username": "aom_karan_west",
+    "email": "karan.west@lighthouse.com",
     "phone": "9876543299",
     "password": "NewUpdatedPassword@123",
     "centres": ["Bandra Centre"],
