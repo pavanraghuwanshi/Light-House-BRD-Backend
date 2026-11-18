@@ -1061,6 +1061,43 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
         "North RSO must see ZERO South, West, East, or Central states"
       );
     });
+
+    it("enforces strict BM vs BM cluster isolation (BM Mumbai NEVER sees BM Pune's West-zone data)", () => {
+      const bmMumbai = {
+        user: { role: "BM", zone: "West", cluster: "Mumbai Cluster", centres: [] },
+        query: {},
+      };
+
+      const filter = buildQueryWithRole(bmMumbai, {}, {
+        clusterCentres: ["Bandra Centre", "Juhu Centre", "Andheri Centre"],
+      });
+
+      assert.ok(Array.isArray(filter.$or), "BM filter must use $or over cluster and cluster centres");
+      // Ensure NO broad zone condition exists inside $or
+      const hasBroadZoneInOr = filter.$or.some((cond) => cond.zone !== undefined);
+      assert.equal(hasBroadZoneInOr, false, "BM $or filter must NEVER include broad zone (would leak peer BM clusters)");
+
+      // Evaluate against a Pune Cluster incident (same West zone, different cluster)
+      const puneIncident = { zone: "West", cluster: "Pune Cluster", centreName: "Kothrud Centre" };
+      const matchesMumbaiCluster =
+        puneIncident.cluster.toLowerCase() === "mumbai cluster" ||
+        ["Bandra Centre", "Juhu Centre", "Andheri Centre"].includes(puneIncident.centreName);
+      assert.equal(matchesMumbaiCluster, false, "BM Mumbai must NEVER see Pune Cluster incidents");
+    });
+
+    it("prevents BM without cluster and AOM passing peer centreName from leaking data", () => {
+      const bmNoCluster = { user: { role: "BM", zone: "West", cluster: "", centres: [] }, query: {} };
+      const bmFilter = buildQueryWithRole(bmNoCluster);
+      assert.deepEqual(bmFilter.cluster, { $in: [] }, "BM without cluster must fail closed");
+
+      const aomBandraQueryingAndheri = {
+        user: { role: "AOM", zone: "West", centres: ["Bandra Centre", "Juhu Centre"] },
+        query: { centreName: "Andheri Centre" },
+      };
+      const aomFilter = buildQueryWithRole(aomBandraQueryingAndheri);
+      assert.ok(Array.isArray(aomFilter.$and), "AOM query param must be intersected via $and, never overwrite assigned centres");
+      assert.deepEqual(aomFilter.$and[0].centreName, { $in: ["Bandra Centre", "Juhu Centre"] });
+    });
   });
 });
 

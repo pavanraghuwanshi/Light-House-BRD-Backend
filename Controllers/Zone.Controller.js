@@ -160,15 +160,21 @@ export const getZones = async (req, res) => {
     const filter = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
     const zones = await Zone.find(filter).sort({ name: 1 }).lean();
 
-    // Enrich zones with all active RSOs in that zone and centre count
+    // Enrich zones with all active RSOs in that zone and role-scoped centre count
     const enrichedZones = await Promise.all(
       zones.map(async (z) => {
         const zoneRegex = { $regex: `^${escapeRegex(z.name)}$`, $options: "i" };
+        const centreFilter = { zone: zoneRegex, isDeleted: false };
+        if (scope.isAOM) {
+          centreFilter.name = { $in: scope.centres };
+        } else if (scope.isBM) {
+          centreFilter.cluster = scope.cluster
+            ? { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" }
+            : { $in: [] };
+        }
+
         const [centreCount, activeRSOList] = await Promise.all([
-          Centre.countDocuments({
-            zone: zoneRegex,
-            isDeleted: false,
-          }),
+          Centre.countDocuments(centreFilter),
           User.find({
             role: PREK_ROLES.RSO,
             zone: zoneRegex,
@@ -232,8 +238,17 @@ export const getZoneById = async (req, res) => {
     }
 
     const zoneRegex = { $regex: `^${escapeRegex(zone.name)}$`, $options: "i" };
+    const centreFilter = { zone: zoneRegex, isDeleted: false };
+    if (scope.isAOM) {
+      centreFilter.name = { $in: scope.centres };
+    } else if (scope.isBM) {
+      centreFilter.cluster = scope.cluster
+        ? { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" }
+        : { $in: [] };
+    }
+
     const [centres, activeRSOList] = await Promise.all([
-      Centre.find({ zone: zoneRegex, isDeleted: false })
+      Centre.find(centreFilter)
         .select("name code state city cluster isActive")
         .sort({ name: 1 })
         .lean(),

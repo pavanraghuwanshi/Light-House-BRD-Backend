@@ -94,6 +94,11 @@ const incidentSchema = new mongoose.Schema(
       trim: true,
       index: true, // Indian State (e.g. Maharashtra, Karnataka, Delhi) for National Dashboard
     },
+    cluster: {
+      type: String,
+      trim: true,
+      index: true, // Business Manager Cluster (e.g. Mumbai Cluster, Pune Cluster)
+    },
     centreName: {
       type: String,
       trim: true,

@@ -5,6 +5,7 @@ import Incident, {
   normalizeStatus,
 } from "../Models/incident.js";
 import AuditLog from "../Models/auditLog.js";
+import Centre from "../Models/centre.js";
 import { buildQueryWithRole, getUserScope, escapeRegex } from "../Utils/roleResolver.js";
 import mongoose from "mongoose";
 import {
@@ -36,10 +37,32 @@ import {
 import recordAuditLog from "../Utils/auditLogger.js";
 
 /**
+ * Dynamically resolves BM cluster centres from Centre Master so BM queries
+ * strictly match their assigned cluster's centres (never peer BM clusters in the same zone).
+ */
+const resolveRoleFilter = async (req, extraFilters = {}) => {
+  const scope = getUserScope(req);
+  let clusterCentres = [];
+
+  if (scope.isBM && scope.cluster) {
+    const centres = await Centre.find({
+      cluster: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" },
+      isDeleted: false,
+    })
+      .select("name")
+      .lean();
+    clusterCentres = centres.map((c) => c.name);
+  }
+
+  return buildQueryWithRole(req, extraFilters, { clusterCentres });
+};
+
+/**
  * FR-6.1 - FR-6.4: Incident Reporting Controller
- * - Captures: zone/region, state, centre, date, type, severity, reporter name & role, description.
+ * - Captures: zone/region, state, cluster, centre, date, type, severity, reporter name & role, description.
  * - Auto-generates unique Case ID (FR-6.2).
  * - Validates reporter name & description (FR-6.3).
+ * - Enforces strict role boundaries (AOM: own centres, BM: own cluster, RSO: own zone).
  * - Auto-routes to escalation owner & SLA, enforces non-downgradable rules (FR-5.2, FR-6.4).
  * - Confirms escalation owner & SLA to submitter (FR-6.4).
  */
@@ -49,6 +72,7 @@ export const addIncident = async (req, res) => {
       zone,
       region,
       state,
+      cluster,
       centreName,
       incidentType,
       subCategory,
@@ -84,14 +108,66 @@ export const addIncident = async (req, res) => {
       });
     }
 
-    // Enforce zone scope for RSO, BM, AOM when creating incidents
+    // Enforce strict reporting boundaries for RSO (zone), BM (cluster), and AOM (assigned centres)
     const scope = getUserScope(req);
     const requestedZone = String(zone || region || "").trim();
-    if (!scope.isNational && scope.zone && requestedZone && requestedZone.toLowerCase() !== scope.zone.toLowerCase()) {
-      return res.status(403).json({
-        success: false,
-        message: `Access denied: You are only authorized to report incidents within your assigned zone (${scope.zone}).`,
-      });
+    const requestedCentre = String(centreName || req.user?.centres?.[0] || "").trim();
+
+    // Auto-resolve centre metadata from Centre Master (if registered)
+    let matchedCentreDoc = null;
+    if (requestedCentre) {
+      matchedCentreDoc = await Centre.findOne({
+        name: { $regex: `^${escapeRegex(requestedCentre)}$`, $options: "i" },
+        isDeleted: false,
+      })
+        .select("name zone state cluster")
+        .lean();
+    }
+
+    const resolvedZone = requestedZone || matchedCentreDoc?.zone || scope.zone || "North";
+    const resolvedCluster = String(cluster || matchedCentreDoc?.cluster || scope.cluster || "").trim();
+    const resolvedState = String(state || matchedCentreDoc?.state || "").trim();
+
+    if (!scope.isNational) {
+      if (scope.zone && resolvedZone.toLowerCase() !== scope.zone.toLowerCase()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You are only authorized to report incidents within your assigned zone (${scope.zone}).`,
+        });
+      }
+
+      if (scope.isBM) {
+        if (!scope.cluster) {
+          return res.status(403).json({
+            success: false,
+            message: "Access denied: Your Business Manager account has no assigned cluster.",
+          });
+        }
+        if (resolvedCluster && resolvedCluster.toLowerCase() !== scope.cluster.toLowerCase()) {
+          return res.status(403).json({
+            success: false,
+            message: `Access denied: You are only authorized to report incidents within your assigned cluster (${scope.cluster}).`,
+          });
+        }
+      }
+
+      if (scope.isAOM) {
+        if (scope.centres.length === 0) {
+          return res.status(403).json({
+            success: false,
+            message: "Access denied: Your AOM account has no assigned centres.",
+          });
+        }
+        const isOwnCentre = scope.centres.some(
+          (c) => c.toLowerCase() === requestedCentre.toLowerCase()
+        );
+        if (!requestedCentre || !isOwnCentre) {
+          return res.status(403).json({
+            success: false,
+            message: `Access denied: You are only authorized to report incidents for your assigned centre(s): ${scope.centres.join(", ")}.`,
+          });
+        }
+      }
     }
 
     // Determine type and enforce severity rules (FR-5.2)
@@ -101,7 +177,6 @@ export const addIncident = async (req, res) => {
     const incidentDate = date ? new Date(date) : new Date();
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
-    const resolvedZone = requestedZone || scope.zone || "North";
 
     const newIncident = new Incident({
       caseId,
@@ -110,8 +185,9 @@ export const addIncident = async (req, res) => {
       severity: finalSeverity,
       zone: resolvedZone,
       region: resolvedZone,
-      state: state || "",
-      centreName: centreName || req.user?.centres?.[0] || "",
+      state: resolvedState,
+      cluster: resolvedCluster,
+      centreName: requestedCentre,
       date: incidentDate,
       reporterName: finalReporterName,
       reportedBy: finalReporterName,
@@ -217,8 +293,8 @@ export const getIncidents = async (req, res) => {
     }
     const skip = (page - 1) * limit;
 
-    // 5-Tier Role Scoping Filter (FR-1.3)
-    const roleFilter = buildQueryWithRole(req);
+    // 5-Tier Role Scoping Filter (FR-1.3) with dynamic BM cluster centre resolution
+    const roleFilter = await resolveRoleFilter(req);
     const andConditions = [];
 
     if (Object.keys(roleFilter).length > 0) {
@@ -442,7 +518,7 @@ export const updateIncidentStatus = async (req, res) => {
       ? { _id: new mongoose.Types.ObjectId(id) }
       : { caseId: id };
 
-    const filter = buildQueryWithRole(req, query);
+    const filter = await resolveRoleFilter(req, query);
     const incident = await Incident.findOne(filter);
     if (!incident) {
       return res.status(404).json({
@@ -545,8 +621,20 @@ export const updateIncident = async (req, res) => {
       ? { _id: id }
       : { caseId: id };
 
-    let filter = buildQueryWithRole(req, query);
+    const scope = getUserScope(req);
+    let filter = await resolveRoleFilter(req, query);
     delete req.body.caseId; // Prevent modifying unique Case ID
+
+    // Prevent non-national users from reassigning an incident across zones/clusters/centres
+    if (!scope.isNational) {
+      delete req.body.zone;
+      delete req.body.region;
+      delete req.body.cluster;
+      if (scope.isAOM) {
+        delete req.body.centreName;
+        delete req.body.schoolName;
+      }
+    }
 
     const existingIncident = await Incident.findOne(filter);
     if (!existingIncident) {
@@ -663,7 +751,7 @@ export const getNationalDashboard = async (req, res) => {
     const scope = getUserScope(req);
     let filter = {};
     try {
-      filter = buildQueryWithRole(req);
+      filter = await resolveRoleFilter(req);
     } catch (err) {
       return res.status(403).json({
         success: false,
@@ -1003,7 +1091,7 @@ export const getIncidentDashboard = async (req, res) => {
   try {
     let filter;
     try {
-      filter = buildQueryWithRole(req);
+      filter = await resolveRoleFilter(req);
     } catch (roleErr) {
       return res.status(403).json({
         success: false,

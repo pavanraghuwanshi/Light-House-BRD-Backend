@@ -150,24 +150,20 @@ export const getClusters = async (req, res) => {
         }
         andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
       } else if (scope.isBM) {
-        if (!scope.cluster && !scope.zone) {
+        if (!scope.cluster) {
           return res.status(200).json({ success: true, total: 0, data: [] });
         }
+        andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         if (scope.zone) {
           andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
-        }
-        if (scope.cluster) {
-          andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         }
       } else if (scope.isAOM) {
-        if (!scope.zone && !scope.cluster) {
+        if (!scope.cluster) {
           return res.status(200).json({ success: true, total: 0, data: [] });
         }
+        andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         if (scope.zone) {
           andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
-        }
-        if (scope.cluster) {
-          andConditions.push({ name: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         }
       }
     }
@@ -243,20 +239,31 @@ export const getClusters = async (req, res) => {
 
     let enrichedClusters = clusters.map((c) => {
       const assignedBM = bmMap.get(c.name.toLowerCase()) || null;
-      const centresInCluster = clusterCentresMap.get(c.name.toLowerCase()) || [];
+      let centresInCluster = clusterCentresMap.get(c.name.toLowerCase()) || [];
 
-      // Find all AOMs who manage any centre in this cluster
-      const aomsInCluster = activeAOMs.filter((aom) =>
-        Array.isArray(aom.centres) &&
-        aom.centres.some((cnt) => centresInCluster.includes(cnt))
-      ).map((aom) => ({
-        id: aom._id,
-        name: aom.name,
-        username: aom.username,
-        email: aom.email,
-        phone: aom.phone || "",
-        managedCentres: aom.centres.filter((cnt) => centresInCluster.includes(cnt)),
-      }));
+      // Strict peer isolation for AOM: only see own assigned centres (never peer AOM centres)
+      if (scope.isAOM) {
+        const ownCentresLower = new Set(scope.centres.map((cnt) => cnt.toLowerCase()));
+        centresInCluster = centresInCluster.filter((cnt) => ownCentresLower.has(cnt.toLowerCase()));
+      }
+
+      // Find all AOMs who manage any centre in this cluster (for AOM, never leak peer AOMs)
+      const aomsInCluster = activeAOMs
+        .filter((aom) => {
+          if (scope.isAOM && String(aom._id) !== String(req.user?.id)) return false;
+          return (
+            Array.isArray(aom.centres) &&
+            aom.centres.some((cnt) => centresInCluster.includes(cnt))
+          );
+        })
+        .map((aom) => ({
+          id: aom._id,
+          name: aom.name,
+          username: aom.username,
+          email: aom.email,
+          phone: aom.phone || "",
+          managedCentres: aom.centres.filter((cnt) => centresInCluster.includes(cnt)),
+        }));
 
       return {
         ...c,
@@ -310,10 +317,10 @@ export const getClusterById = async (req, res) => {
           message: `Access denied: You can only view clusters within your assigned zone (${scope.zone || "None"}).`,
         });
       }
-      if ((scope.isBM || scope.isAOM) && scope.cluster && cluster.name.toLowerCase() !== scope.cluster.toLowerCase()) {
+      if ((scope.isBM || scope.isAOM) && (!scope.cluster || cluster.name.toLowerCase() !== scope.cluster.toLowerCase())) {
         return res.status(403).json({
           success: false,
-          message: `Access denied: You can only view your assigned cluster (${scope.cluster}).`,
+          message: `Access denied: You can only view your assigned cluster (${scope.cluster || "None"}).`,
         });
       }
     }
@@ -321,31 +328,41 @@ export const getClusterById = async (req, res) => {
     // Active BM assigned to this cluster
     const assignedBM = await User.findOne({
       role: PREK_ROLES.BM,
-      cluster: { $regex: `^${cluster.name}$`, $options: "i" },
+      cluster: { $regex: `^${escapeRegex(cluster.name)}$`, $options: "i" },
       isActive: true,
       isDeleted: { $ne: true },
     })
       .select("name username email phone zone")
       .lean();
 
-    // Centres in this cluster
-    const centres = await Centre.find({
-      cluster: { $regex: `^${cluster.name}$`, $options: "i" },
+    // Centres in this cluster (strictly scoped to own centres for AOM)
+    const centreFilter = {
+      cluster: { $regex: `^${escapeRegex(cluster.name)}$`, $options: "i" },
       isDeleted: false,
-    })
+    };
+    if (scope.isAOM) {
+      centreFilter.name = { $in: scope.centres };
+    }
+
+    const centres = await Centre.find(centreFilter)
       .select("name code state city address isActive")
       .sort({ name: 1 })
       .lean();
 
     const centreNames = centres.map((c) => c.name);
 
-    // AOMs managing centres in this cluster
-    const activeAOMs = await User.find({
+    // AOMs managing centres in this cluster (never leak peer AOMs to another AOM)
+    const aomFilter = {
       role: PREK_ROLES.AOM,
       centres: { $in: centreNames },
       isActive: true,
       isDeleted: { $ne: true },
-    })
+    };
+    if (scope.isAOM) {
+      aomFilter._id = req.user?.id;
+    }
+
+    const activeAOMs = await User.find(aomFilter)
       .select("name username email phone centres")
       .lean();
 
@@ -408,10 +425,10 @@ export const getClusterAOMs = async (req, res) => {
           message: `Access denied: You can only view AOMs within your assigned zone (${scope.zone || "None"}).`,
         });
       }
-      if (scope.isBM && scope.cluster && cluster.name.toLowerCase() !== scope.cluster.toLowerCase()) {
+      if (scope.isBM && (!scope.cluster || cluster.name.toLowerCase() !== scope.cluster.toLowerCase())) {
         return res.status(403).json({
           success: false,
-          message: `Access denied: You can only view AOMs under your assigned cluster (${scope.cluster}).`,
+          message: `Access denied: You can only view AOMs under your assigned cluster (${scope.cluster || "None"}).`,
         });
       }
       if (scope.isAOM) {

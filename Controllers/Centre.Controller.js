@@ -181,14 +181,12 @@ export const getCentres = async (req, res) => {
         }
         andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
       } else if (scope.isBM) {
-        if (!scope.zone && !scope.cluster) {
+        if (!scope.cluster) {
           return res.status(200).json({ success: true, total: 0, page: 1, limit: 50, data: [] });
         }
+        andConditions.push({ cluster: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         if (scope.zone) {
           andConditions.push({ zone: { $regex: `^${escapeRegex(scope.zone)}$`, $options: "i" } });
-        }
-        if (scope.cluster) {
-          andConditions.push({ cluster: { $regex: `^${escapeRegex(scope.cluster)}$`, $options: "i" } });
         }
       } else if (scope.isAOM) {
         if (scope.centres.length === 0) {
@@ -325,11 +323,11 @@ export const getCentreById = async (req, res) => {
         }
       } else if (scope.isBM) {
         const zoneMismatch = scope.zone && centre.zone.toLowerCase() !== scope.zone.toLowerCase();
-        const clusterMismatch = scope.cluster && (!centre.cluster || centre.cluster.toLowerCase() !== scope.cluster.toLowerCase());
+        const clusterMismatch = !scope.cluster || !centre.cluster || centre.cluster.toLowerCase() !== scope.cluster.toLowerCase();
         if (zoneMismatch || clusterMismatch) {
           return res.status(403).json({
             success: false,
-            message: `Access denied: You can only view centres within your assigned cluster (${scope.cluster || scope.zone}).`,
+            message: `Access denied: You can only view centres within your assigned cluster (${scope.cluster || "None"}).`,
           });
         }
       } else if (scope.isAOM) {

@@ -1,4 +1,5 @@
 import User from "../Models/user.js";
+import Centre from "../Models/centre.js";
 import jwt from "jsonwebtoken";
 import { comparePassword, encrypt, decrypt } from "../Utils/crypto.js";
 import authCache from "../Utils/authCache.js";
@@ -776,14 +777,28 @@ export const getUsers = async (req, res) => {
         andConditions.push({ zone: { $regex: `^${escapeRegex(String(zone).trim())}$`, $options: "i" } });
       }
     } else if (isBM) {
-      // Business Manager is scoped to view the AOMs under their assigned cluster & zone
+      // Business Manager is strictly scoped to view AOMs under their assigned cluster (never peer clusters)
       andConditions.push({ role: PREK_ROLES.AOM });
-      if (!reqCluster && !reqZone) {
+      if (!reqCluster) {
         return res.status(200).json({ success: true, total: 0, data: [] });
       }
-      if (reqCluster) {
-        andConditions.push({ cluster: { $regex: `^${escapeRegex(reqCluster)}$`, $options: "i" } });
+
+      const clusterCentres = await Centre.find({
+        cluster: { $regex: `^${escapeRegex(reqCluster)}$`, $options: "i" },
+        isDeleted: false,
+      })
+        .select("name")
+        .lean();
+      const clusterCentreNames = clusterCentres.map((c) => c.name);
+
+      const bmMatchConditions = [
+        { cluster: { $regex: `^${escapeRegex(reqCluster)}$`, $options: "i" } },
+      ];
+      if (clusterCentreNames.length > 0) {
+        bmMatchConditions.push({ centres: { $in: clusterCentreNames } });
       }
+      andConditions.push({ $or: bmMatchConditions });
+
       if (reqZone) {
         andConditions.push({ zone: { $regex: `^${escapeRegex(reqZone)}$`, $options: "i" } });
       }

@@ -46,7 +46,7 @@ export const getUserScope = (req) => {
  * - Business Manager (BM): Cluster of areas within a zone
  * - Area Operations Manager (AOM): Own centre(s) / local area
  */
-export const buildQueryWithRole = (req, extraFilters = {}) => {
+export const buildQueryWithRole = (req, extraFilters = {}, options = {}) => {
   const { role, rawRole, zone: userZone, cluster: userCluster, centres: userCentres } = getUserScope(req);
 
   let filter = {};
@@ -68,32 +68,32 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
       filter.zone = { $in: [] };
     }
   } else if (role === PREK_ROLES.BM) {
-    // Business Manager is scoped to cluster / assigned centres within zone
+    // Business Manager is STRICTLY scoped to their assigned cluster & centres inside that cluster
+    // NEVER widens to the full zone (guarantees horizontal BM vs BM peer isolation)
     const clusterConditions = [];
     if (userCluster) {
       clusterConditions.push({ cluster: userCluster });
+      clusterConditions.push({ cluster: { $regex: `^${escapeRegex(userCluster)}$`, $options: "i" } });
     }
-    if (userCentres.length > 0) {
-      clusterConditions.push({ centreName: { $in: userCentres } });
-    }
-    if (userZone) {
-      const escapedZone = escapeRegex(userZone);
-      clusterConditions.push({ zone: { $regex: `^${escapedZone}$`, $options: "i" } });
+    const extraClusterCentres = Array.isArray(options.clusterCentres) ? options.clusterCentres : [];
+    const combinedCentres = Array.from(new Set([...userCentres, ...extraClusterCentres].filter(Boolean)));
+    if (combinedCentres.length > 0) {
+      clusterConditions.push({ centreName: { $in: combinedCentres } });
     }
     if (clusterConditions.length > 0) {
       filter.$or = clusterConditions;
     } else {
-      // Fail-closed: BM without cluster/centres/zone cannot view any data
-      filter.zone = { $in: [] };
+      // Fail-closed: BM without an assigned cluster or centres cannot view any data
+      filter.cluster = { $in: [] };
     }
   } else if (role === PREK_ROLES.AOM) {
-    // AOM is scoped to own centre(s) / local area
+    // AOM is STRICTLY scoped to their assigned centre(s) only
     if (userCentres.length > 0) {
       filter.centreName = { $in: userCentres };
     } else if (req.user?.area) {
       filter.centreName = req.user.area;
     } else {
-      // AOM without assigned centres cannot view peer or other centres' incidents
+      // Fail-closed: AOM without assigned centres cannot view peer or other centres' incidents
       filter.centreName = { $in: [] };
     }
   } else {
@@ -137,7 +137,6 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
     // Never allow query params to overwrite mandatory RBAC scope keys
     if (key === "zone" || key === "region") {
       if (role === PREK_ROLES.RSO || role === PREK_ROLES.BM || role === PREK_ROLES.AOM) {
-        // Intersect requested zone/region with mandatory role scope so cross-zone queries return 0 records
         const escapedVal = escapeRegex(strVal);
         extraAndConditions.push({
           $or: [
@@ -149,7 +148,14 @@ export const buildQueryWithRole = (req, extraFilters = {}) => {
       }
     }
 
-    if (key === "centreName" && role === PREK_ROLES.AOM) {
+    if (key === "cluster" && (role === PREK_ROLES.BM || role === PREK_ROLES.AOM)) {
+      extraAndConditions.push({
+        cluster: { $regex: `^${escapeRegex(strVal)}$`, $options: "i" },
+      });
+      return;
+    }
+
+    if (key === "centreName" && (role === PREK_ROLES.AOM || role === PREK_ROLES.BM)) {
       extraAndConditions.push({
         centreName: { $regex: `^${escapeRegex(strVal)}$`, $options: "i" },
       });
