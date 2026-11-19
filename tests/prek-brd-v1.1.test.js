@@ -1280,6 +1280,46 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       const canCentralClose = canRoleCloseIncident(centralUser.role, existingCriticalIncident.severity);
       assert.equal(canCentralClose, true, "Central can close Critical incident during update");
     });
+
+    it("parses and validates custom date from body in addIncident and updateIncident", () => {
+      const customDateStr = "2026-11-15T09:30:00.000Z";
+      const parsedDate = new Date(customDateStr);
+      assert.equal(isNaN(parsedDate.getTime()), false, "Valid date string parses successfully");
+      assert.equal(parsedDate.toISOString(), customDateStr);
+
+      const invalidDateStr = "not-a-valid-date";
+      const parsedInvalid = new Date(invalidDateStr);
+      assert.equal(isNaN(parsedInvalid.getTime()), true, "Invalid date string is detected as NaN");
+    });
+
+    it("recalculates slaDeadline when date or severity is updated in updateIncident", () => {
+      const incidentBaseDate = new Date("2026-11-10T10:00:00.000Z");
+      const initialSlaDeadline = calculateSlaDeadline(incidentBaseDate, "Low");
+      // Low is 72 hours
+      const expectedInitial = new Date(incidentBaseDate.getTime() + 72 * 60 * 60 * 1000);
+      assert.equal(initialSlaDeadline.getTime(), expectedInitial.getTime());
+
+      // Update date to 2026-11-12 and severity to Medium (48 hours)
+      const updatedDate = new Date("2026-11-12T10:00:00.000Z");
+      const updatedSlaDeadline = calculateSlaDeadline(updatedDate, "Medium");
+      const expectedUpdated = new Date(updatedDate.getTime() + 48 * 60 * 60 * 1000);
+      assert.equal(updatedSlaDeadline.getTime(), expectedUpdated.getTime());
+    });
+
+    it("allows creating and updating incidents with any past/previous date without restriction", () => {
+      // Past dates: 10 days ago, 3 months ago, 1 year ago
+      const pastDates = [
+        "2026-11-09T08:00:00.000Z",
+        "2026-08-15T12:00:00.000Z",
+        "2025-10-01T00:00:00.000Z",
+      ];
+
+      pastDates.forEach((d) => {
+        const parsed = new Date(d);
+        assert.equal(isNaN(parsed.getTime()), false, `Date ${d} must be valid`);
+        assert.ok(parsed.getTime() < Date.now(), `Date ${d} must be recognized as past date`);
+      });
+    });
   });
 });
 

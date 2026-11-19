@@ -91,6 +91,7 @@ export const addIncident = async (req, res) => {
       pendingAction = "",
       stakeholders = [],
       date,
+      incidentDate: rawIncidentDate,
     } = req.body;
 
     // 1. Mandatory Input Validation (FR-6.3)
@@ -222,7 +223,20 @@ export const addIncident = async (req, res) => {
       }
     }
 
-    const incidentDate = date ? new Date(date) : new Date();
+    // Accept any previous/past or current date for incident reporting
+    const inputDate = date ?? rawIncidentDate;
+    let incidentDate = new Date();
+    if (inputDate) {
+      const parsedDate = new Date(inputDate);
+      if (isNaN(parsedDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid date format for incident date.",
+        });
+      }
+      incidentDate = parsedDate;
+    }
+
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
     const cleanDescription = description.trim();
@@ -261,6 +275,7 @@ export const addIncident = async (req, res) => {
       cluster: resolvedCluster,
       centreName: requestedCentre,
       date: incidentDate,
+      incidentDate: incidentDate,
       reporterId,
       reporterName,
       reportedBy: reporterName,
@@ -312,6 +327,7 @@ export const addIncident = async (req, res) => {
       success: true,
       message: successMessage,
       caseId: newIncident.caseId,
+      date: newIncident.date,
       status: newIncident.status,
       closingRemark: isClosed ? resolvedClosingRemark : undefined,
       closureDate: newIncident.closureDate,
@@ -712,6 +728,10 @@ export const updateIncident = async (req, res) => {
     const scope = getUserScope(req);
     let filter = await resolveRoleFilter(req, query);
     delete req.body.caseId; // Prevent modifying unique Case ID
+    delete req.body.reporterId;
+    delete req.body.reporterName;
+    delete req.body.reportedBy;
+    delete req.body.reporterRole;
 
     // Prevent non-national users from reassigning an incident across zones/clusters/centres
     if (!scope.isNational) {
@@ -732,19 +752,51 @@ export const updateIncident = async (req, res) => {
       });
     }
 
+    // Validate and parse date / incidentDate if provided (accepts any previous date)
+    const rawUpdateDate = req.body.date ?? req.body.incidentDate;
+    if (rawUpdateDate !== undefined && rawUpdateDate !== null) {
+      const parsedDate = new Date(rawUpdateDate);
+      if (isNaN(parsedDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid date format for incident date.",
+        });
+      }
+      req.body.date = parsedDate;
+      req.body.incidentDate = parsedDate;
+    }
+
+    // Synchronize description & incidentType aliases
+    if (req.body.description && !req.body.briefDescription) {
+      req.body.briefDescription = req.body.description;
+    } else if (req.body.briefDescription && !req.body.description) {
+      req.body.description = req.body.briefDescription;
+    }
+
+    if (req.body.incidentType && !req.body.subCategory) {
+      req.body.subCategory = req.body.incidentType;
+    } else if (req.body.subCategory && !req.body.incidentType) {
+      req.body.incidentType = req.body.subCategory;
+    }
+
     // FR-5.2: Non-downgradable rule
     const targetType = req.body.incidentType || req.body.subCategory || existingIncident.incidentType;
     if (isNonDowngradable(targetType) && req.body.severity && req.body.severity !== "Critical") {
       req.body.severity = "Critical"; // Block downgrade
     }
 
-    if (req.body.severity) {
-      const escalation = getEscalationDetails(req.body.severity);
+    // Recalculate SLA and escalation parameters if severity or date is updated
+    if (req.body.severity || req.body.date) {
+      const targetSeverity = req.body.severity || existingIncident.severity;
+      const escalation = getEscalationDetails(targetSeverity);
+      const effectiveDate = req.body.date || existingIncident.date || new Date();
+
       req.body.escalationOwner = escalation.owner;
       req.body.escalationOwnerRole = escalation.ownerRole;
       req.body.sla = escalation.sla;
       req.body.slaHours = escalation.slaHours;
       req.body.slaAction = escalation.action;
+      req.body.slaDeadline = calculateSlaDeadline(effectiveDate, targetSeverity);
     }
 
     // Status & Closure Handling (Allow closing an open incident or updating status)

@@ -113,6 +113,10 @@ const incidentSchema = new mongoose.Schema(
       default: Date.now,
       index: true,
     },
+    incidentDate: {
+      type: Date,
+      index: true,
+    },
     reporterId: {
       type: String,
       trim: true,
@@ -260,6 +264,12 @@ incidentSchema.pre("save", function (next) {
     this.schoolName = this.centreName;
   } else if (this.schoolName && !this.centreName) {
     this.centreName = this.schoolName;
+  }
+
+  if (this.date && !this.incidentDate) {
+    this.incidentDate = this.date;
+  } else if (this.incidentDate && !this.date) {
+    this.date = this.incidentDate;
   }
 
   // FR-5.2: Mandatory Critical for Corporal Punishment & POCSO (Non-downgradable)
