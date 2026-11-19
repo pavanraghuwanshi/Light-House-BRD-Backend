@@ -958,17 +958,34 @@ To permanently protect same-level data privacy:
 - **Access:** Authenticated (All Provisioned Staff)
 - **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
 - **Request Body:**
-  > **Note:** `reporterName` and `reporterRole` are **automatically extracted from the authenticated JWT token** (`name` and `role` fields in `req.user`). They do not need to be passed in the body.
+  > **Note:**
+  > - `reporterName`, `reporterRole`, and `reporterId` are **automatically extracted from the authenticated JWT token** (`req.user`). They do not need to be passed in the body.
+  > - `status` defaults to `"Open"`. It can be optionally set to `"Closed"` (or `"Close"`).
+  > - If `status` is `"Closed"` (or `"Close"`), `closingRemark` is **mandatory**, and the authenticated user's role must have closure authority for the incident's severity (FR-7.2).
   ```json
   {
     "zone": "West",
     "centreName": "Bandra Centre",
     "state": "Maharashtra",
     "incidentType": "POCSO",
+    "status": "Open",
     "description": "Child reported inappropriate contact by unauthorized visitor on school premises.",
     "immediateActionTaken": "Child immediately moved to safety and evaluated by school counselor. Parents informed.",
     "pendingAction": "Police FIR to be registered under POCSO Act.",
     "stakeholders": ["Parents", "Local Police", "School Principal"]
+  }
+  ```
+  *(Example for reporting an incident already resolved / closed on creation):*
+  ```json
+  {
+    "zone": "West",
+    "centreName": "Bandra Centre",
+    "state": "Maharashtra",
+    "incidentType": "Minor Injury",
+    "severity": "Low",
+    "status": "Closed",
+    "closingRemark": "First aid administered immediately by campus nurse. Child resumed classes with parents updated.",
+    "description": "Minor scrape on left knee during recess playground tag."
   }
   ```
 - **Success Response (`201 Created`):**
@@ -1061,16 +1078,25 @@ To permanently protect same-level data privacy:
   }
   ```
 
-#### 4. Update Incident Details
+#### 4. Update Incident Details & Case Closure
 - **Endpoint:** `PUT /api/update-incident/:id`
-- **Access:** Authenticated (Authorized for that centre)
+- **Access:** Authenticated (Authorized for that centre, Role Closure Authority Enforced: FR-7.2)
 - **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
-- **Request Body:**
+- **Request Body (General Update):**
   ```json
   {
     "description": "Updated incident report notes",
     "immediateActionTaken": "Child counseling initiated.",
     "pendingAction": "Police follow-up on Friday."
+  }
+  ```
+- **Request Body (Closing an Open Incident):**
+  > If updating `status` to `"Closed"`, `closingRemark` is **mandatory**, and the authenticated user's role must possess closure authority for the incident's severity (FR-7.2).
+  ```json
+  {
+    "status": "Closed",
+    "closingRemark": "Local investigation concluded with parents and child safely resumed classes.",
+    "immediateActionTaken": "First aid administered."
   }
   ```
 - **Downgrade Restriction Rule (FR-5.2):** If a user tries to downgrade severity of POCSO or Corporal Punishment:

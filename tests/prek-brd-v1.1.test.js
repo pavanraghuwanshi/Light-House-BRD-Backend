@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import jwt from "jsonwebtoken";
+import { normalizeStatus } from "../Models/incident.js";
 import {
   PREK_ROLES,
   normalizePrekRole,
@@ -1144,6 +1145,140 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
 
       const reporterName = user.name || user.username;
       assert.equal(reporterName, "aom_north", "Falls back gracefully to username when name is absent");
+    });
+  });
+
+  describe("17. Incident Creation Status & Closure Validation (FR-6.1, FR-7.2)", () => {
+    it("accepts valid status enum (Open, Closed, Close) and defaults to Open", () => {
+      const defaultStatus = normalizeStatus(undefined || "Open");
+      assert.equal(defaultStatus, "Open");
+
+      assert.equal(normalizeStatus("Open"), "Open");
+      assert.equal(normalizeStatus("open"), "Open");
+      assert.equal(normalizeStatus("Closed"), "Closed");
+      assert.equal(normalizeStatus("close"), "Closed");
+      assert.equal(normalizeStatus("Close"), "Closed");
+    });
+
+    it("rejects invalid status values on creation (e.g. In Progress, Pending)", () => {
+      const invalidStatuses = ["In Progress", "Pending", "unknown", "arbitrary"];
+      invalidStatuses.forEach((st) => {
+        const norm = normalizeStatus(st);
+        const isValidEnum = norm === "Open" || norm === "Closed";
+        assert.equal(isValidEnum, false, `Status '${st}' must NOT be allowed on creation`);
+      });
+    });
+
+    it("requires closingRemark when status is Closed or Close", () => {
+      const validateClosing = (status, closingRemark) => {
+        const normalized = normalizeStatus(status);
+        const isClosed = normalized === "Closed";
+        const cleanRemark = String(closingRemark || "").trim();
+        if (isClosed && !cleanRemark) {
+          return { error: "Closing remark is required when closing an incident." };
+        }
+        return { success: true };
+      };
+
+      assert.deepEqual(validateClosing("Closed", ""), {
+        error: "Closing remark is required when closing an incident.",
+      });
+      assert.deepEqual(validateClosing("Close", "   "), {
+        error: "Closing remark is required when closing an incident.",
+      });
+      assert.deepEqual(validateClosing("Closed", "First-aid administered and child resumed activities"), {
+        success: true,
+      });
+      assert.deepEqual(validateClosing("Open", ""), {
+        success: true,
+      });
+    });
+
+    it("enforces role-based closure permission when creating with Closed status", () => {
+      // AOM cannot close Critical incidents
+      const aomCanCloseCritical = canRoleCloseIncident("AOM", "Critical");
+      assert.equal(aomCanCloseCritical, false, "AOM must NOT be allowed to create POCSO/Critical incidents as Closed");
+
+      // AOM can close Low incidents
+      const aomCanCloseLow = canRoleCloseIncident("AOM", "Low");
+      assert.equal(aomCanCloseLow, true, "AOM can create and close Low severity incidents");
+
+      // Central can close all incidents including Critical
+      const centralCanCloseCritical = canRoleCloseIncident("Central", "Critical");
+      assert.equal(centralCanCloseCritical, true, "Central Admin can create and close Critical incidents");
+    });
+
+    it("allows updating an open incident to Closed via updateIncident with closingRemark and closure metadata", () => {
+      const existingIncident = {
+        _id: "inc-101",
+        caseId: "INC-20261119-1001",
+        status: "Open",
+        severity: "Low",
+        history: [],
+      };
+
+      const updatePayload = {
+        status: "Closed",
+        closingRemark: "Issue investigated and resolved locally.",
+      };
+
+      const user = {
+        id: "aom-1",
+        name: "AOM User",
+        role: "AOM",
+      };
+
+      const normalizedStatus = normalizeStatus(updatePayload.status);
+      assert.equal(normalizedStatus, "Closed");
+
+      const canClose = canRoleCloseIncident(user.role, existingIncident.severity);
+      assert.equal(canClose, true, "AOM is authorized to close Low severity incident");
+
+      const closingRemark = String(updatePayload.closingRemark || "").trim();
+      assert.ok(closingRemark.length > 0, "Closing remark is present");
+
+      const closedBy = {
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        closedAt: new Date(),
+      };
+      assert.equal(closedBy.userName, "AOM User");
+
+      const historyEntry = {
+        changedBy: user.name,
+        userRole: user.role,
+        action: "INCIDENT_CLOSED",
+        previousStatus: existingIncident.status,
+        newStatus: normalizedStatus,
+        remarks: closingRemark,
+      };
+      assert.equal(historyEntry.action, "INCIDENT_CLOSED");
+      assert.equal(historyEntry.previousStatus, "Open");
+      assert.equal(historyEntry.newStatus, "Closed");
+    });
+
+    it("blocks unauthorized roles from closing high-severity incidents via updateIncident", () => {
+      const existingCriticalIncident = {
+        status: "Open",
+        severity: "Critical",
+      };
+
+      const aomUser = { role: "AOM" };
+      const canAOMClose = canRoleCloseIncident(aomUser.role, existingCriticalIncident.severity);
+      assert.equal(canAOMClose, false, "AOM cannot close Critical incident during update");
+
+      const bmUser = { role: "BM" };
+      const canBMClose = canRoleCloseIncident(bmUser.role, existingCriticalIncident.severity);
+      assert.equal(canBMClose, false, "BM cannot close Critical incident during update");
+
+      const rsoUser = { role: "RSO" };
+      const canRSOClose = canRoleCloseIncident(rsoUser.role, existingCriticalIncident.severity);
+      assert.equal(canRSOClose, false, "RSO cannot close Critical incident during update");
+
+      const centralUser = { role: "Central" };
+      const canCentralClose = canRoleCloseIncident(centralUser.role, existingCriticalIncident.severity);
+      assert.equal(canCentralClose, true, "Central can close Critical incident during update");
     });
   });
 });

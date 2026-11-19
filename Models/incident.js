@@ -204,6 +204,10 @@ const incidentSchema = new mongoose.Schema(
     },
     escalatedTo: String,
     remarks: String,
+    closingRemark: {
+      type: String,
+      trim: true,
+    },
     // Auditable case history (Section 3, FR-1.5)
     history: [
       {

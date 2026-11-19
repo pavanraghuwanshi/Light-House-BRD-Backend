@@ -82,6 +82,11 @@ export const addIncident = async (req, res) => {
       description,
       centreName,
       state,
+      status = "Open",
+      closingRemark,
+      closingRemarks,
+      closureRemark,
+      remarks,
       immediateActionTaken = "",
       pendingAction = "",
       stakeholders = [],
@@ -100,6 +105,27 @@ export const addIncident = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Incident type is required (FR-6.3).",
+      });
+    }
+
+    // Validate status enum: allows "Open" or "Closed" (also accepts "Close")
+    const normalizedStatus = normalizeStatus(status);
+    if (normalizedStatus !== "Open" && normalizedStatus !== "Closed") {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status: '${status}'. Allowed status values are: Open, Closed.`,
+      });
+    }
+
+    const isClosed = normalizedStatus === "Closed";
+    const resolvedClosingRemark = String(
+      closingRemark || closingRemarks || closureRemark || remarks || ""
+    ).trim();
+
+    if (isClosed && !resolvedClosingRemark) {
+      return res.status(400).json({
+        success: false,
+        message: "Closing remark is required when closing an incident.",
       });
     }
 
@@ -181,10 +207,47 @@ export const addIncident = async (req, res) => {
     const finalType = incidentType.trim();
     const finalSeverity = enforceSeverityRules(finalType, requestedSeverity);
     const escalation = getEscalationDetails(finalSeverity);
+
+    // If reporting with Closed status, verify user role closure authorization (FR-7.2)
+    if (isClosed) {
+      const canClose = canRoleCloseIncident(user.role, finalSeverity);
+      if (!canClose) {
+        return res.status(403).json({
+          success: false,
+          message: `Permission denied: ${user.role || "User"} is not authorized to close ${finalSeverity}-severity incidents. ${finalSeverity} incidents must be resolved by ${escalation.owner}.`,
+          severity: finalSeverity,
+          escalationOwner: escalation.owner,
+          allowedRoles: escalation.canCloseRoles,
+        });
+      }
+    }
+
     const incidentDate = date ? new Date(date) : new Date();
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
     const cleanDescription = description.trim();
+
+    const closureDate = isClosed ? incidentDate : null;
+    const closedBy = isClosed
+      ? {
+          userId: user.id || "unknown",
+          userName: reporterName,
+          userRole: reporterRole,
+          closedAt: new Date(),
+        }
+      : undefined;
+
+    const history = [
+      {
+        changedBy: reporterName,
+        userRole: reporterRole,
+        action: isClosed ? "INCIDENT_CREATED_AND_CLOSED" : "INCIDENT_CREATED",
+        previousStatus: "None",
+        newStatus: normalizedStatus,
+        timestamp: new Date(),
+        remarks: isClosed ? resolvedClosingRemark : "Incident initially logged",
+      },
+    ];
 
     // 6. Build and Save Incident Document
     const newIncident = new Incident({
@@ -207,7 +270,12 @@ export const addIncident = async (req, res) => {
       immediateActionTaken: immediateActionTaken?.trim() || "",
       pendingAction: pendingAction?.trim() || "",
       stakeholders: Array.isArray(stakeholders) ? stakeholders : [],
-      status: "Open",
+      status: normalizedStatus,
+      closureDate,
+      closedBy,
+      remarks: isClosed ? resolvedClosingRemark : "",
+      closingRemark: isClosed ? resolvedClosingRemark : "",
+      history,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
       sla: escalation.sla,
@@ -221,23 +289,33 @@ export const addIncident = async (req, res) => {
     // 7. Record Immutable Audit Log (FR-1.5)
     await recordAuditLog({
       req,
-      action: "INCIDENT_CREATED",
+      action: isClosed ? "INCIDENT_CREATED_AND_CLOSED" : "INCIDENT_CREATED",
       entityType: "Incident",
       entityId: newIncident._id,
       details: {
         caseId: newIncident.caseId,
         incidentType: newIncident.incidentType,
         severity: newIncident.severity,
+        status: newIncident.status,
+        closingRemark: isClosed ? resolvedClosingRemark : undefined,
         escalationOwner: escalation.owner,
         sla: escalation.sla,
       },
     });
 
     // 8. Confirm Escalation Owner and SLA to Submitter (FR-6.4)
+    const successMessage = isClosed
+      ? `Incident ${newIncident.caseId} reported and closed successfully.`
+      : `Incident ${newIncident.caseId} reported successfully. Escalated to ${escalation.owner} with ${escalation.sla} SLA.`;
+
     return res.status(201).json({
       success: true,
-      message: `Incident ${newIncident.caseId} reported successfully. Escalated to ${escalation.owner} with ${escalation.sla} SLA.`,
+      message: successMessage,
       caseId: newIncident.caseId,
+      status: newIncident.status,
+      closingRemark: isClosed ? resolvedClosingRemark : undefined,
+      closureDate: newIncident.closureDate,
+      closedBy: newIncident.closedBy,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
       sla: escalation.sla,
@@ -669,6 +747,84 @@ export const updateIncident = async (req, res) => {
       req.body.slaAction = escalation.action;
     }
 
+    // Status & Closure Handling (Allow closing an open incident or updating status)
+    let isClosing = false;
+    let isReopening = false;
+
+    if (req.body.status) {
+      const normalizedStatus = normalizeStatus(req.body.status);
+      if (normalizedStatus !== "Open" && normalizedStatus !== "Closed") {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid status: '${req.body.status}'. Allowed status values are: Open, Closed.`,
+        });
+      }
+
+      req.body.status = normalizedStatus;
+      isClosing = normalizedStatus === "Closed";
+      isReopening = normalizedStatus === "Open" && existingIncident.status === "Closed";
+
+      if (isClosing) {
+        const targetSeverity = req.body.severity || existingIncident.severity;
+        const userRole = req.user?.role;
+        const canClose = canRoleCloseIncident(userRole, targetSeverity);
+
+        if (!canClose) {
+          const escalation = getEscalationDetails(targetSeverity);
+          return res.status(403).json({
+            success: false,
+            message: `Permission denied: ${userRole || "User"} is not authorized to close ${targetSeverity}-severity incidents. ${targetSeverity} incidents must be resolved by ${escalation.owner}.`,
+            severity: targetSeverity,
+            escalationOwner: escalation.owner,
+            allowedRoles: escalation.canCloseRoles,
+          });
+        }
+
+        const closingRemark = String(
+          req.body.closingRemark ||
+          req.body.closingRemarks ||
+          req.body.closureRemark ||
+          req.body.remarks ||
+          ""
+        ).trim();
+
+        if (!closingRemark) {
+          return res.status(400).json({
+            success: false,
+            message: "Closing remark is required when closing an incident.",
+          });
+        }
+
+        req.body.closureDate = req.body.closureDate ? new Date(req.body.closureDate) : new Date();
+        req.body.closedBy = {
+          userId: req.user?.id || req.user?._id || "unknown",
+          userName: req.user?.name || req.user?.username || "unknown",
+          userRole: req.user?.role || "unknown",
+          closedAt: new Date(),
+        };
+        req.body.closingRemark = closingRemark;
+        req.body.remarks = closingRemark;
+      } else if (isReopening) {
+        req.body.closureDate = null;
+        req.body.closedBy = null;
+      }
+
+      // Record in auditable history
+      if (req.body.status !== existingIncident.status) {
+        const historyEntry = {
+          changedBy: req.user?.name || req.user?.username || "unknown",
+          userRole: req.user?.role || "unknown",
+          action: isClosing ? "INCIDENT_CLOSED" : "INCIDENT_REOPENED",
+          previousStatus: existingIncident.status,
+          newStatus: req.body.status,
+          timestamp: new Date(),
+          remarks: req.body.closingRemark || req.body.remarks || "Status updated via incident update",
+        };
+        const existingHistory = Array.isArray(existingIncident.history) ? existingIncident.history : [];
+        req.body.history = [...existingHistory, historyEntry];
+      }
+    }
+
     const updatedIncident = await Incident.findOneAndUpdate(
       filter,
       { $set: req.body },
@@ -678,18 +834,23 @@ export const updateIncident = async (req, res) => {
     // FR-1.5: Audit Log
     await recordAuditLog({
       req,
-      action: "INCIDENT_UPDATED",
+      action: isClosing ? "INCIDENT_CLOSED" : "INCIDENT_UPDATED",
       entityType: "Incident",
       entityId: updatedIncident._id,
       details: {
         caseId: updatedIncident.caseId,
         updatedFields: Object.keys(req.body),
+        status: updatedIncident.status,
       },
     });
 
+    const successMessage = isClosing
+      ? `Incident ${updatedIncident.caseId || id} closed successfully.`
+      : "Incident updated successfully.";
+
     return res.status(200).json({
       success: true,
-      message: "Incident updated successfully.",
+      message: successMessage,
       data: updatedIncident,
     });
   } catch (err) {
