@@ -113,6 +113,11 @@ const incidentSchema = new mongoose.Schema(
       default: Date.now,
       index: true,
     },
+    reporterId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
     reporterName: {
       type: String,
       required: true,

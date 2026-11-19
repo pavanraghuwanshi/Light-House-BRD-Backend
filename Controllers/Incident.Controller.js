@@ -68,39 +68,50 @@ const resolveRoleFilter = async (req, extraFilters = {}) => {
  */
 export const addIncident = async (req, res) => {
   try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: Valid authentication session is required.",
+      });
+    }
+
     const {
+      // Categorization & descriptions (supports both aliases)
+      incidentType,
+      subCategory,
+      category = "Incident",
+      severity: requestedSeverity,
+      description,
+      briefDescription,
+
+      // Location & hierarchy
       zone,
       region,
       state,
       cluster,
       centreName,
-      incidentType,
-      subCategory,
-      severity: requestedSeverity,
-      reporterName,
-      reportedBy,
-      reporterRole,
-      description,
-      briefDescription,
-      immediateActionTaken,
-      pendingAction,
+      schoolName,
+
+      // Workflow & lifecycle tracking
+      status = "Open",
+      closureDate,
+      immediateActionTaken = "",
+      pendingAction = "",
+      stakeholders = [],
+      escalationStatus = "No",
+      escalatedTo = "",
+      remarks = "",
       date,
-      stakeholders,
+
+      // Reporter overrides (token takes precedence)
+      reporterName: bodyReporterName,
+      reportedBy: bodyReportedBy,
+      reporterRole: bodyReporterRole,
     } = req.body;
 
-    // FR-6.3: Pre-submission validation
-    const finalReporterName = String(
-      reporterName || reportedBy || req.user?.name || req.user?.username || ""
-    ).trim();
+    // 1. Normalize and Validate Required Content (FR-6.3)
     const finalDescription = String(description || briefDescription || "").trim();
-
-    if (!finalReporterName) {
-      return res.status(400).json({
-        success: false,
-        message: "Reporter name is required (FR-6.3).",
-      });
-    }
-
     if (!finalDescription) {
       return res.status(400).json({
         success: false,
@@ -108,12 +119,26 @@ export const addIncident = async (req, res) => {
       });
     }
 
-    // Enforce strict reporting boundaries for RSO (zone), BM (cluster), and AOM (assigned centres)
-    const scope = getUserScope(req);
-    const requestedZone = String(zone || region || "").trim();
-    const requestedCentre = String(centreName || req.user?.centres?.[0] || "").trim();
+    const finalType = String(incidentType || subCategory || "Other").trim();
+    const finalSubCategory = String(subCategory || incidentType || finalType).trim();
 
-    // Auto-resolve centre metadata from Centre Master (if registered)
+    // 2. Derive Reporter Identity from Authenticated Token
+    const reporterName = user.name || user.username || bodyReporterName || bodyReportedBy || "";
+    const reporterRole = user.role || bodyReporterRole || "Staff";
+    const reporterId = user.id || "";
+
+    if (!reporterName) {
+      return res.status(400).json({
+        success: false,
+        message: "Reporter name could not be resolved from token (FR-6.3).",
+      });
+    }
+
+    // 3. Resolve Centre and Reporting Hierarchy
+    const scope = getUserScope(req);
+    const requestedCentre = String(centreName || schoolName || user.centres?.[0] || "").trim();
+    const requestedZone = String(zone || region || "").trim();
+
     let matchedCentreDoc = null;
     if (requestedCentre) {
       matchedCentreDoc = await Centre.findOne({
@@ -124,10 +149,12 @@ export const addIncident = async (req, res) => {
         .lean();
     }
 
-    const resolvedZone = requestedZone || matchedCentreDoc?.zone || scope.zone || "North";
-    const resolvedCluster = String(cluster || matchedCentreDoc?.cluster || scope.cluster || "").trim();
+    // Token scope takes precedence for scoped users (RSO/BM/AOM); fallback to master / body for national
+    const resolvedZone = scope.zone || matchedCentreDoc?.zone || requestedZone || "North";
+    const resolvedCluster = scope.cluster || matchedCentreDoc?.cluster || String(cluster || "").trim();
     const resolvedState = String(state || matchedCentreDoc?.state || "").trim();
 
+    // 4. Role Hierarchy Boundary Verification
     if (!scope.isNational) {
       if (scope.zone && resolvedZone.toLowerCase() !== scope.zone.toLowerCase()) {
         return res.status(403).json({
@@ -170,45 +197,52 @@ export const addIncident = async (req, res) => {
       }
     }
 
-    // Determine type and enforce severity rules (FR-5.2)
-    const finalType = incidentType || subCategory || "Other";
+    // 5. Determine Severity and Escalation Rules (FR-5.2)
     const finalSeverity = enforceSeverityRules(finalType, requestedSeverity);
     const escalation = getEscalationDetails(finalSeverity);
     const incidentDate = date ? new Date(date) : new Date();
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
 
+    // 6. Build and Save Incident Document
     const newIncident = new Incident({
       caseId,
       incidentType: finalType,
-      subCategory: finalType,
+      subCategory: finalSubCategory,
+      category,
       severity: finalSeverity,
       zone: resolvedZone,
       region: resolvedZone,
       state: resolvedState,
       cluster: resolvedCluster,
       centreName: requestedCentre,
+      schoolName: requestedCentre,
       date: incidentDate,
-      reporterName: finalReporterName,
-      reportedBy: finalReporterName,
-      reporterRole: reporterRole || req.user?.role || "Staff",
+      reporterId,
+      reporterName,
+      reportedBy: reporterName,
+      reporterRole,
       description: finalDescription,
       briefDescription: finalDescription,
-      immediateActionTaken: immediateActionTaken || "",
-      pendingAction: pendingAction || "",
+      immediateActionTaken: String(immediateActionTaken || "").trim(),
+      pendingAction: String(pendingAction || "").trim(),
       stakeholders: Array.isArray(stakeholders) ? stakeholders : [],
-      status: "Open",
+      status: status || "Open",
+      closureDate: closureDate ? new Date(closureDate) : undefined,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
       sla: escalation.sla,
       slaHours: escalation.slaHours,
       slaAction: escalation.action,
       slaDeadline,
+      escalationStatus: escalationStatus || "No",
+      escalatedTo: escalatedTo || escalation.owner || "",
+      remarks: String(remarks || "").trim(),
     });
 
     await newIncident.save();
 
-    // FR-1.5: Audit Log
+    // 7. Record Immutable Audit Log (FR-1.5)
     await recordAuditLog({
       req,
       action: "INCIDENT_CREATED",
@@ -217,13 +251,14 @@ export const addIncident = async (req, res) => {
       details: {
         caseId: newIncident.caseId,
         incidentType: newIncident.incidentType,
+        category: newIncident.category,
         severity: newIncident.severity,
         escalationOwner: escalation.owner,
         sla: escalation.sla,
       },
     });
 
-    // FR-6.4: Confirm escalation owner and SLA to submitter
+    // 8. Confirm Escalation Owner and SLA to Submitter (FR-6.4)
     return res.status(201).json({
       success: true,
       message: `Incident ${newIncident.caseId} reported successfully. Escalated to ${escalation.owner} with ${escalation.sla} SLA.`,

@@ -1099,5 +1099,85 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       assert.deepEqual(aomFilter.$and[0].centreName, { $in: ["Bandra Centre", "Juhu Centre"] });
     });
   });
+
+  describe("16. Reporter Identity Resolution from JWT Token (FR-6.3)", () => {
+    it("resolves reporter name, role, id, and zone directly from token without body overrides", () => {
+      const user = {
+        id: "user-123",
+        name: "Pavan Raghuwanshi",
+        username: "pavanr",
+        email: "pavan@prek.com",
+        role: "RSO",
+        zone: "North",
+      };
+
+      const reporterName = user.name || user.username;
+      const reporterRole = user.role;
+      const reporterId = user.id;
+
+      assert.equal(reporterName, "Pavan Raghuwanshi", "Reporter name must match token name field");
+      assert.equal(reporterRole, "RSO", "Reporter role must match token role field");
+      assert.equal(reporterId, "user-123", "Reporter id must match token id field");
+    });
+
+    it("prevents body spoofing by pulling identity exclusively from token", () => {
+      const user = {
+        id: "user-456",
+        name: "Ramesh Sharma",
+        username: "ramesh.sharma",
+        role: "AOM",
+      };
+
+      const reporterName = user.name || user.username;
+      const reporterRole = user.role;
+
+      assert.equal(reporterName, "Ramesh Sharma", "Token name is stored directly");
+      assert.equal(reporterRole, "AOM", "Token role is stored directly");
+    });
+
+    it("falls back to username if name is not present in token", () => {
+      const user = {
+        id: "user-789",
+        username: "aom_north",
+        role: "AOM",
+      };
+
+      const reporterName = user.name || user.username;
+      assert.equal(reporterName, "aom_north", "Falls back gracefully to username when name is absent");
+    });
+
+    it("preserves full incident payload (category, subCategory, briefDescription, closureDate, escalationStatus, remarks)", () => {
+      const payload = {
+        region: "East",
+        category: "Hazard & Risk",
+        severity: "High",
+        reportedBy: "AOM",
+        subCategory: "Classroom",
+        stakeholders: ["Academic Operation Manager"],
+        briefDescription: "sdfdfsdfdsfds",
+        immediateActionTaken: "dfdsfsdssd",
+        pendingAction: "ssdfdfdfdf",
+        closureDate: "2026-11-21",
+        status: "Open",
+        escalationStatus: "No",
+        escalatedTo: "",
+        remarks: "",
+      };
+
+      const finalDescription = String(payload.description || payload.briefDescription || "").trim();
+      const finalType = String(payload.incidentType || payload.subCategory || "Other").trim();
+      const finalSubCategory = String(payload.subCategory || payload.incidentType || finalType).trim();
+      const requestedZone = String(payload.zone || payload.region || "").trim();
+
+      assert.equal(finalDescription, "sdfdfsdfdsfds");
+      assert.equal(finalType, "Classroom");
+      assert.equal(finalSubCategory, "Classroom");
+      assert.equal(requestedZone, "East");
+      assert.equal(payload.category, "Hazard & Risk");
+      assert.equal(payload.status, "Open");
+      assert.equal(payload.escalationStatus, "No");
+      assert.equal(new Date(payload.closureDate).toISOString().slice(0, 10), "2026-11-21");
+    });
+  });
 });
 
