@@ -68,7 +68,7 @@ const resolveRoleFilter = async (req, extraFilters = {}) => {
  */
 export const addIncident = async (req, res) => {
   try {
-    const user = req.user;
+    const { user } = req;
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -77,55 +77,36 @@ export const addIncident = async (req, res) => {
     }
 
     const {
-      // Categorization & descriptions (supports both aliases)
       incidentType,
-      subCategory,
-      category = "Incident",
       severity: requestedSeverity,
       description,
-      briefDescription,
-
-      // Location & hierarchy
-      zone,
-      region,
-      state,
-      cluster,
       centreName,
-      schoolName,
-
-      // Workflow & lifecycle tracking
-      status = "Open",
-      closureDate,
+      state,
       immediateActionTaken = "",
       pendingAction = "",
       stakeholders = [],
-      escalationStatus = "No",
-      escalatedTo = "",
-      remarks = "",
       date,
-
-      // Reporter overrides (token takes precedence)
-      reporterName: bodyReporterName,
-      reportedBy: bodyReportedBy,
-      reporterRole: bodyReporterRole,
     } = req.body;
 
-    // 1. Normalize and Validate Required Content (FR-6.3)
-    const finalDescription = String(description || briefDescription || "").trim();
-    if (!finalDescription) {
+    // 1. Mandatory Input Validation (FR-6.3)
+    if (!description?.trim()) {
       return res.status(400).json({
         success: false,
         message: "Incident description is required (FR-6.3).",
       });
     }
 
-    const finalType = String(incidentType || subCategory || "Other").trim();
-    const finalSubCategory = String(subCategory || incidentType || finalType).trim();
+    if (!incidentType?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Incident type is required (FR-6.3).",
+      });
+    }
 
-    // 2. Derive Reporter Identity from Authenticated Token
-    const reporterName = user.name || user.username || bodyReporterName || bodyReportedBy || "";
-    const reporterRole = user.role || bodyReporterRole || "Staff";
-    const reporterId = user.id || "";
+    // 2. Token-Derived Reporter Identity
+    const reporterName = user.name || user.username;
+    const reporterRole = user.role;
+    const reporterId = user.id;
 
     if (!reporterName) {
       return res.status(400).json({
@@ -136,8 +117,7 @@ export const addIncident = async (req, res) => {
 
     // 3. Resolve Centre and Reporting Hierarchy
     const scope = getUserScope(req);
-    const requestedCentre = String(centreName || schoolName || user.centres?.[0] || "").trim();
-    const requestedZone = String(zone || region || "").trim();
+    const requestedCentre = centreName?.trim() || user.centres?.[0] || "";
 
     let matchedCentreDoc = null;
     if (requestedCentre) {
@@ -149,10 +129,10 @@ export const addIncident = async (req, res) => {
         .lean();
     }
 
-    // Token scope takes precedence for scoped users (RSO/BM/AOM); fallback to master / body for national
-    const resolvedZone = scope.zone || matchedCentreDoc?.zone || requestedZone || "North";
-    const resolvedCluster = scope.cluster || matchedCentreDoc?.cluster || String(cluster || "").trim();
-    const resolvedState = String(state || matchedCentreDoc?.state || "").trim();
+    // Derive hierarchy: scoped user token takes precedence, fallback to Centre Master / body for national
+    const resolvedZone = scope.zone || matchedCentreDoc?.zone || req.body.zone?.trim() || "North";
+    const resolvedCluster = scope.cluster || matchedCentreDoc?.cluster || req.body.cluster?.trim() || "";
+    const resolvedState = state?.trim() || matchedCentreDoc?.state || "";
 
     // 4. Role Hierarchy Boundary Verification
     if (!scope.isNational) {
@@ -198,46 +178,42 @@ export const addIncident = async (req, res) => {
     }
 
     // 5. Determine Severity and Escalation Rules (FR-5.2)
+    const finalType = incidentType.trim();
     const finalSeverity = enforceSeverityRules(finalType, requestedSeverity);
     const escalation = getEscalationDetails(finalSeverity);
     const incidentDate = date ? new Date(date) : new Date();
     const slaDeadline = calculateSlaDeadline(incidentDate, finalSeverity);
     const caseId = generateCaseId();
+    const cleanDescription = description.trim();
 
     // 6. Build and Save Incident Document
     const newIncident = new Incident({
       caseId,
       incidentType: finalType,
-      subCategory: finalSubCategory,
-      category,
+      subCategory: finalType,
       severity: finalSeverity,
       zone: resolvedZone,
       region: resolvedZone,
       state: resolvedState,
       cluster: resolvedCluster,
       centreName: requestedCentre,
-      schoolName: requestedCentre,
       date: incidentDate,
       reporterId,
       reporterName,
       reportedBy: reporterName,
       reporterRole,
-      description: finalDescription,
-      briefDescription: finalDescription,
-      immediateActionTaken: String(immediateActionTaken || "").trim(),
-      pendingAction: String(pendingAction || "").trim(),
+      description: cleanDescription,
+      briefDescription: cleanDescription,
+      immediateActionTaken: immediateActionTaken?.trim() || "",
+      pendingAction: pendingAction?.trim() || "",
       stakeholders: Array.isArray(stakeholders) ? stakeholders : [],
-      status: status || "Open",
-      closureDate: closureDate ? new Date(closureDate) : undefined,
+      status: "Open",
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
       sla: escalation.sla,
       slaHours: escalation.slaHours,
       slaAction: escalation.action,
       slaDeadline,
-      escalationStatus: escalationStatus || "No",
-      escalatedTo: escalatedTo || escalation.owner || "",
-      remarks: String(remarks || "").trim(),
     });
 
     await newIncident.save();
@@ -251,7 +227,6 @@ export const addIncident = async (req, res) => {
       details: {
         caseId: newIncident.caseId,
         incidentType: newIncident.incidentType,
-        category: newIncident.category,
         severity: newIncident.severity,
         escalationOwner: escalation.owner,
         sla: escalation.sla,

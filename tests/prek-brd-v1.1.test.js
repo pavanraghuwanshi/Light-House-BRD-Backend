@@ -1145,39 +1145,6 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
       const reporterName = user.name || user.username;
       assert.equal(reporterName, "aom_north", "Falls back gracefully to username when name is absent");
     });
-
-    it("preserves full incident payload (category, subCategory, briefDescription, closureDate, escalationStatus, remarks)", () => {
-      const payload = {
-        region: "East",
-        category: "Hazard & Risk",
-        severity: "High",
-        reportedBy: "AOM",
-        subCategory: "Classroom",
-        stakeholders: ["Academic Operation Manager"],
-        briefDescription: "sdfdfsdfdsfds",
-        immediateActionTaken: "dfdsfsdssd",
-        pendingAction: "ssdfdfdfdf",
-        closureDate: "2026-11-21",
-        status: "Open",
-        escalationStatus: "No",
-        escalatedTo: "",
-        remarks: "",
-      };
-
-      const finalDescription = String(payload.description || payload.briefDescription || "").trim();
-      const finalType = String(payload.incidentType || payload.subCategory || "Other").trim();
-      const finalSubCategory = String(payload.subCategory || payload.incidentType || finalType).trim();
-      const requestedZone = String(payload.zone || payload.region || "").trim();
-
-      assert.equal(finalDescription, "sdfdfsdfdsfds");
-      assert.equal(finalType, "Classroom");
-      assert.equal(finalSubCategory, "Classroom");
-      assert.equal(requestedZone, "East");
-      assert.equal(payload.category, "Hazard & Risk");
-      assert.equal(payload.status, "Open");
-      assert.equal(payload.escalationStatus, "No");
-      assert.equal(new Date(payload.closureDate).toISOString().slice(0, 10), "2026-11-21");
-    });
   });
 });
 

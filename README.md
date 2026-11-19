@@ -957,25 +957,18 @@ To permanently protect same-level data privacy:
 - **Endpoint:** `POST /api/add-incident`
 - **Access:** Authenticated (All Provisioned Staff)
 - **Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
-- **Request Body (supports canonical & legacy portal formats):**
-  > **Note:** Reporter credentials (`reporterName`, `reportedBy`, `reporterRole`, `reporterId`) and scoped hierarchy (`zone`, `cluster`, assigned centre for AOM) are **automatically extracted from the authenticated JWT token**. Body aliases like `region` for `zone`, `subCategory` for `incidentType`, and `briefDescription` for `description` are fully supported.
+- **Request Body:**
+  > **Note:** `reporterName` and `reporterRole` are **automatically extracted from the authenticated JWT token** (`name` and `role` fields in `req.user`). They do not need to be passed in the body.
   ```json
   {
-    "region": "East",
-    "category": "Hazard & Risk",
-    "severity": "High",
-    "subCategory": "Classroom",
-    "stakeholders": [
-      "Academic Operation Manager"
-    ],
-    "briefDescription": "Broken window pane observed near junior classroom.",
-    "immediateActionTaken": "Area cordoned off and students relocated to library.",
-    "pendingAction": "Facility maintenance team scheduled for replacement.",
-    "closureDate": "2026-11-21",
-    "status": "Open",
-    "escalationStatus": "No",
-    "escalatedTo": "",
-    "remarks": ""
+    "zone": "West",
+    "centreName": "Bandra Centre",
+    "state": "Maharashtra",
+    "incidentType": "POCSO",
+    "description": "Child reported inappropriate contact by unauthorized visitor on school premises.",
+    "immediateActionTaken": "Child immediately moved to safety and evaluated by school counselor. Parents informed.",
+    "pendingAction": "Police FIR to be registered under POCSO Act.",
+    "stakeholders": ["Parents", "Local Police", "School Principal"]
   }
   ```
 - **Success Response (`201 Created`):**
