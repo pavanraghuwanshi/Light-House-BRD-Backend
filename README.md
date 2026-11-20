@@ -972,6 +972,7 @@ To permanently protect same-level data privacy:
     "description": "Child reported inappropriate contact by unauthorized visitor on school premises.",
     "immediateActionTaken": "Child immediately moved to safety and evaluated by school counselor. Parents informed.",
     "pendingAction": "Police FIR to be registered under POCSO Act.",
+    "escalatedTo": "Central Legal Head & Local Police",
     "stakeholders": ["Parents", "Local Police", "School Principal"]
   }
   ```

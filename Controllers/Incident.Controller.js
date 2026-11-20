@@ -87,6 +87,7 @@ export const addIncident = async (req, res) => {
       closingRemarks,
       closureRemark,
       remarks,
+      escalatedTo,
       immediateActionTaken = "",
       pendingAction = "",
       stakeholders = [],
@@ -293,6 +294,8 @@ export const addIncident = async (req, res) => {
       history,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
+      escalatedTo: escalatedTo ? String(escalatedTo).trim() : "",
+      escalationStatus: escalatedTo ? "Yes" : "No",
       sla: escalation.sla,
       slaHours: escalation.slaHours,
       slaAction: escalation.action,
@@ -312,6 +315,7 @@ export const addIncident = async (req, res) => {
         incidentType: newIncident.incidentType,
         severity: newIncident.severity,
         status: newIncident.status,
+        escalatedTo: newIncident.escalatedTo,
         closingRemark: isClosed ? resolvedClosingRemark : undefined,
         escalationOwner: escalation.owner,
         sla: escalation.sla,
@@ -334,6 +338,7 @@ export const addIncident = async (req, res) => {
       closedBy: newIncident.closedBy,
       escalationOwner: escalation.owner,
       escalationOwnerRole: escalation.ownerRole,
+      escalatedTo: newIncident.escalatedTo,
       sla: escalation.sla,
       slaHours: escalation.slaHours,
       slaDeadline: newIncident.slaDeadline,
@@ -783,6 +788,12 @@ export const updateIncident = async (req, res) => {
     const targetType = req.body.incidentType || req.body.subCategory || existingIncident.incidentType;
     if (isNonDowngradable(targetType) && req.body.severity && req.body.severity !== "Critical") {
       req.body.severity = "Critical"; // Block downgrade
+    }
+
+    // Update escalatedTo (person's name) if provided
+    if (req.body.escalatedTo !== undefined && req.body.escalatedTo !== null) {
+      req.body.escalatedTo = String(req.body.escalatedTo).trim();
+      req.body.escalationStatus = req.body.escalatedTo ? "Yes" : "No";
     }
 
     // Recalculate SLA and escalation parameters if severity or date is updated

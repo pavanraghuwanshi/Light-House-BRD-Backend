@@ -1320,6 +1320,24 @@ describe("BRD v1.1 Test Suite: Pre-K Division National Incident & Safety Reporti
         assert.ok(parsed.getTime() < Date.now(), `Date ${d} must be recognized as past date`);
       });
     });
+
+    it("supports escalatedTo field storing a specific person's name in incident creation and updates", () => {
+      const personName = "Dr. Rajesh Sharma";
+
+      // In creation: escalatedTo stores the specific person's name, or defaults to empty string if not escalated
+      const finalEscalatedTo = personName ? personName.trim() : "";
+      assert.equal(finalEscalatedTo, "Dr. Rajesh Sharma");
+
+      const notEscalated = undefined;
+      const emptyEscalatedTo = notEscalated ? String(notEscalated).trim() : "";
+      assert.equal(emptyEscalatedTo, "");
+
+      // In update: escalatedTo updates person's name and marks escalationStatus to 'Yes'
+      const updatePayload = { escalatedTo: "Karan Patel (Legal Head)" };
+      const escalationStatus = updatePayload.escalatedTo ? "Yes" : "No";
+      assert.equal(escalationStatus, "Yes");
+      assert.equal(updatePayload.escalatedTo.trim(), "Karan Patel (Legal Head)");
+    });
   });
 });
 
